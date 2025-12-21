@@ -7,6 +7,103 @@ class GOESProduct:
     level:str
     scan:str
 
+    def __str__(self):
+        return "-".join([
+            self.satellite,
+            self.sensor,
+            self.level,
+            self.scan,
+            ])
+
+bands = {
+    1:{
+        "ctr_wl":0.47,
+        "name":"Visible Blue",
+        "default_res":1,
+        "kappa0":0.0015839,
+        },
+    2:{
+        "ctr_wl":0.64,
+        "name":"Visible Red 0",
+        "default_res":.5,
+        "kappa0":0.0019586,
+        },
+    3:{
+        "ctr_wl":0.86,
+        "name":"Near-Infrared Veggie",
+        "default_res":1,
+        "kappa0":0.0033384,
+        },
+    4:{
+        "ctr_wl":1.37,
+        "name":"Near-Infrared Cirrus",
+        "default_res":2,
+        "kappa0":0.008853,
+        },
+    5:{
+        "ctr_wl":1.6,
+        "name":"Near-Infrared Snow/Ice",
+        "default_res":1,
+        "kappa0":0.0131734,
+        },
+    6:{
+        "ctr_wl":2.2,
+        "name":"Near-Infrared Cloud particle size",
+        "default_res":2,
+        "kappa0":0.0415484,
+        },
+    7:{
+        "ctr_wl":3.9,
+        "name":"Infrared Shortwave window",
+        "default_res":2,
+        },
+    8:{
+        "ctr_wl":6.2,
+        "name":"Infrared Upper-level water vapor",
+        "default_res":2,
+        },
+    9:{
+        "ctr_wl":6.9,
+        "name":"Infrared Midlevel water vapor",
+        "default_res":2,
+        },
+    10:{
+        "ctr_wl":7.3,
+        "name":"Infrared Lower-level water vapor",
+        "default_res":2,
+        },
+    11:{
+        "ctr_wl":8.4,
+        "name":"Infrared Cloud-top phase",
+        "default_res":2,
+        },
+    12:{
+        "ctr_wl":9.6,
+        "name":"Infrared Ozone",
+        "default_res":2,
+        },
+    13:{
+        "ctr_wl":10.3,
+        "name":"Infrared 'Clean' longwave window",
+        "default_res":2,
+        },
+    14:{
+        "ctr_wl":11.2,
+        "name":"Infrared Longwave window",
+        "default_res":2,
+        },
+    15:{
+        "ctr_wl":12.3,
+        "name":"Infrared 'Dirty' longwave window",
+        "default_res":2,
+        },
+    16:{
+        "ctr_wl":13.3,
+        "name":"Infrared CO2 longwave",
+        "default_res":2,
+        },
+    }
+
 valid_goes_products = [ ## updated 20251215
     GOESProduct(satellite="18", sensor="ABI", level="Flood", scan="Day"),
     GOESProduct(satellite="18", sensor="ABI", level="Flood", scan="Hourly"),
