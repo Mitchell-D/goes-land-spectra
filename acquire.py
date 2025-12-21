@@ -138,6 +138,7 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
             if ptype == "ABI-L2-LSTC-M3":
                 lmask_path = p
             else:
+                print(ptype.split("-")[:3])
                 assert ptype.split("-")[:3] == ["ABI","L1b","RadC"]
                 rad_paths.append((ptype[-3:], p))
         assert not lmask_path is None
@@ -621,5 +622,7 @@ if __name__=="__main__":
                     new["min"][mv_both] = np.where(
                             cur["min"]<prv["min"], cur["min"], prv["min"])
                     pkl.dump((new,metadata), out_path.open("wb"))
-            gc.collect()
+                prv,cur,new,mv_prv,mv_cur,mv_both,mv_only_cur,mv_only_prv = \
+                        [None]*8
+                gc.collect()
     exit(0)
