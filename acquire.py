@@ -2,6 +2,7 @@ import numpy as np
 import boto3
 import pickle as pkl
 import time
+import gc
 from botocore import UNSIGNED
 from botocore.client import Config
 from multiprocessing import Pool,Lock
@@ -66,39 +67,43 @@ def dump_geos_geom(geom_dir, cur_geom, nc_path, domain_mask=None):
         )
     assert geom_dir.exists()
     index_path = geom_dir.joinpath("index.pkl")
-    with geom_index_lock: ## acquire the semaphor
-        ## load the index file of geometries
-        if index_path.exists():
-            geoms = pkl.load(index_path.open("rb"))
-        else:
-            geoms = {}
-        ## construct the key associated with this projection
-        cur = tuple(float(cur_geom[k]) for k in match_fields)
-        geom_pkl_path = None
-        ## see if there is a pkl indexed that matches this projection
-        for k,v in list(geoms.items())[::-1]:
-            if np.all(np.isclose(cur,k)):
-                geom_pkl_path = Path(v)
 
-        ## if there is a pkl for this geom configuration, return its path
-        if not geom_pkl_path is None:
-            if geom_pkl_path.exists():
-                return geom_pkl_path
-        ## make a new listing entry for the pkl otherwise
-        else:
-            geom_pkl_path = geom_dir.joinpath(
-                f"geom_goes_conus_{len(geoms.keys())}.pkl")
-            geoms = {cur:geom_pkl_path.as_posix(), **geoms}
-            pkl.dump(geoms, index_path.open("wb"))
+    geom_index_lock.acquire() ## acquire the semaphor
+    ## load the index file of geometries
+    if index_path.exists():
+        geoms = pkl.load(index_path.open("rb"))
+    else:
+        geoms = {}
+    ## construct the key associated with this projection
+    cur = tuple(float(cur_geom[k]) for k in match_fields)
+    geom_pkl_path = None
+    ## see if there is a pkl indexed that matches this projection
+    for k,v in list(geoms.items())[::-1]:
+        if np.all(np.isclose(cur,k)):
+            geom_pkl_path = Path(v)
 
-        ds = Dataset(nc_path, "r")
-        sa_ns,sa_ew = np.meshgrid(ds["y"][...], ds["x"][...], indexing="ij")
-        pkl.dump(({
-            "n_s_scan_angles":sa_ns,
-            "e_w_scan_angles":sa_ew,
-            "sweep_angle_axis":"x",
-            **{f:cur_geom[f] for f in match_fields},
-            }, domain_mask), geom_pkl_path.open("wb"))
+    ## if there is a pkl for this geom configuration, return its path
+    if not geom_pkl_path is None:
+        if geom_pkl_path.exists():
+            geom_index_lock.release()
+            return geom_pkl_path
+    ## make a new listing entry for the pkl otherwise
+    else:
+        geom_pkl_path = geom_dir.joinpath(
+            f"geom-goes-conus-{len(geoms.keys())}.pkl")
+        geoms = {cur:geom_pkl_path.as_posix(), **geoms}
+        pkl.dump(geoms, index_path.open("wb"))
+
+    ds = Dataset(nc_path, "r")
+    sa_ns,sa_ew = np.meshgrid(ds["y"][...], ds["x"][...], indexing="ij")
+    ds.close()
+    pkl.dump(({
+        "n_s_scan_angles":sa_ns,
+        "e_w_scan_angles":sa_ew,
+        "sweep_angle_axis":"x",
+        **{f:cur_geom[f] for f in match_fields},
+        }, domain_mask), geom_pkl_path.open("wb"))
+    geom_index_lock.release()
     return geom_pkl_path
 
 def load_geos_geom(geom_pkl_path):
@@ -201,17 +206,17 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
                         m_cur.strides[0], m_cur.strides[1]
                         ),
                     ), axis=(2,3))
-            m_rad = m_tmp if m_rad is None else m_rad & m_tmp
+            m_rad = m_tmp&m_valid if m_rad is None else m_rad&m_tmp
 
         rad_results = {
-            (geom_path.stem, dstr[4:6], sstr, bk):None
+            (geom_path.stem, dstr[4:6], str(sstr), bk):None
             for bk in bands
             }
 
         #m_dom_cur = m_rad[m_domain]
         for band,rad,fac in zip(bands,radiances,res_facs):
-            rkey = (geom_path.stem, dstr[4:6], sstr, band)
-            print(f"handling {rkey}")
+            rkey = (geom_path.stem, dstr[4:6], str(sstr), band)
+            print(f"handling {dstr} {rkey}")
             if rad_results[rkey] is None:
                 tmp_size = domain_size * fac**2
                 rad_results[rkey] = {
@@ -232,51 +237,30 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
                 m_rad_tmp = np.repeat(m_rad_tmp, fac, axis=1)
             sub_rad = rad[m_dom_tmp]
             #m_sub = np.where(m_rad_tmp[m_dom_tmp])[0]
+            #m_sub = (m_rad_tmp[m_dom_tmp]&np.isfinite(sub_rad)) & (sub_rad>0)
             m_sub = m_rad_tmp[m_dom_tmp]
 
             rad_results[rkey]["count"][m_sub] += 1
-            m_first = rad_results[rkey]["count"][m_sub] == 1
+            m_first = m_sub & (rad_results[rkey]["count"] == 1)
             if np.any(m_first):
-                rad_results[rkey]["mean"][m_sub][m_first] = \
-                        sub_rad[m_sub][m_first]
-                rad_results[rkey]["min"][m_sub][m_first] = \
-                        sub_rad[m_sub][m_first]
-                rad_results[rkey]["max"][m_sub][m_first] = \
-                        sub_rad[m_sub][m_first]
+                rad_results[rkey]["mean"][m_first] = sub_rad[m_first]
+                rad_results[rkey]["min"][m_first] = sub_rad[m_first]
+                rad_results[rkey]["max"][m_first] = sub_rad[m_first]
+                rad_results[rkey]["m2"][m_first] = 0.
 
-            m_max = rad_results[rkey]["max"][m_sub] < sub_rad[m_sub]
-            if np.any(m_max):
-                rad_results[rkey]["max"][m_sub][m_max] = sub_rad[m_sub][m_max]
-
-            m_min = rad_results[rkey]["min"][m_sub] > sub_rad[m_sub]
-            if np.any(m_min):
-                rad_results[rkey]["min"][m_sub][m_min] = sub_rad[m_sub][m_min]
+            rad_results[rkey]["max"][m_sub] = np.nanmin(
+                    [rad_results[rkey]["max"][m_sub], sub_rad[m_sub]], axis=0)
+            rad_results[rkey]["min"][m_sub] = np.nanmin(
+                    [rad_results[rkey]["min"][m_sub], sub_rad[m_sub]], axis=0)
 
             d1 = sub_rad[m_sub] - rad_results[rkey]["mean"][m_sub]
             rad_results[rkey]["mean"][m_sub] += d1 \
                     / rad_results[rkey]["count"][m_sub]
             d2 = sub_rad[m_sub] - rad_results[rkey]["mean"][m_sub]
             rad_results[rkey]["m2"][m_sub] += d1*d2
-            '''
-            for ix in m_sub:
-                rad_results[rkey]["count"][ix] += 1
-                if rad_results[rkey]["count"][ix]==1:
-                    rad_results[rkey]["mean"][ix] = sub_rad[ix]
-                    rad_results[rkey]["min"][ix] = sub_rad[ix]
-                    rad_results[rkey]["max"][ix] = sub_rad[ix]
-                elif rad_results[rkey]["max"][ix] < sub_rad[ix]:
-                    rad_results[rkey]["max"][ix] = sub_rad[ix]
-                elif rad_results[rkey]["min"][ix] > sub_rad[ix]:
-                    rad_results[rkey]["min"][ix] = sub_rad[ix]
-                d1 = sub_rad[ix] - rad_results[rkey]["mean"][ix]
-                rad_results[rkey]["mean"][ix] += d1 \
-                        / rad_results[rkey]["count"][ix]
-                d2 = sub_rad[ix] - rad_results[rkey]["mean"][ix]
-                rad_results[rkey]["m2"][ix] += d1*d2
-            '''
-
-            m_first = rad_results[rkey]["count"][m_sub] == 1
-            rad_results[rkey]["count"][m_sub][m_first] += 1
+    if delete_files:
+        for p in paths:
+            p.unlink()
     return rad_results,metadata ## assumes metadata consistent
 
 def get_abi_l1b_radiance(nc_file:Path, get_mask:bool=False, _ds=None):
@@ -297,8 +281,11 @@ def get_abi_l1b_radiance(nc_file:Path, get_mask:bool=False, _ds=None):
     rad = ds["Rad"][...].data
     if get_mask:
         m_valid = ds["DQF"][...]==0
+    else:
+        m_valid = np.all(rad.shape, True)
     mkeys = [k for k in req_meta if k in ds.variables.keys()]
     metadata = {k:tmpd for k in mkeys if not (tmpd:=ds[k][:].data)==0}
+    ds.close()
     return rad,m_valid,metadata
 
 def rad_to_Tb(rads:np.array, fk1:np.array, fk2:np.array,
@@ -330,6 +317,7 @@ def load_clear_mask(cmask_path:Path):
     m_valid = np.ma.getmask(cmask)
     m_valid &= ds["DQF"][...].data == 0
     cmask = ds["BCM"][...].data == 0
+    ds.close()
     return cmask,m_valid,proj
 
 def load_valid_mask(lst_nc_path:Path):
@@ -361,6 +349,7 @@ def load_valid_mask(lst_nc_path:Path):
     dqf = ds["DQF"][...]
     mlabels = ["m_valid", "m_clear", "m_vza", "m_land", "m_value"]
     masks = [(dqf&b)==0 for b in [2,4,8,16,32]]
+    ds.close()
     return mlabels,masks,proj
 
 def mp_list_goes_day(args):
@@ -479,10 +468,10 @@ if __name__=="__main__":
 
     ## start and end day for data listing
     goes_version = 16
-    sday = datetime(2019,3,15)
-    eday = datetime(2019,4,1)
-    #sday = datetime(2018,1,1)
-    #eday = datetime(2022,12,31)
+    #sday = datetime(2019,3,15)
+    #eday = datetime(2019,4,1)
+    sday = datetime(2018,1,1)
+    eday = datetime(2022,12,31)
 
     ## L1b radiance bands to acquire
     l1b_bands = [1,2,3,5,6,7,13,15]
@@ -492,9 +481,10 @@ if __name__=="__main__":
     lwtimes = [timedelta(hours=t) for t in [12,15,18,21,0,3,6,9]]
 
     ## maximum error in closest file time before timestep is invalidated
-    dt_thresh_mins = 15
-    nworkers = 8
-    batch_size = 4 ## number of timesteps at once per worker
+    dt_thresh_mins = 5
+    #nworkers = 4
+    nworkers = 3
+    batch_size = 2 ## number of timesteps at once per worker
 
     ## identifying name of this dataset for the listing pkl
     listing_name = f"goes{goes_version}_clearland-l1b-c0" ## lmask&l1b combo 0
@@ -502,21 +492,14 @@ if __name__=="__main__":
     new_listing = False
     debug = True
     redownload = False
-    delete_after_use = False
+    delete_after_use = True
 
     """ ---------------- ( end normal configuration ) ---------------- """
 
-    listing_path = listing_dir.joinpath(
-            f"listing_{listing_name}" + \
-            f"_{sday.strftime('%Y%m%d')}" + \
-            f"_{eday.strftime('%Y%m%d')}.pkl"
-            )
-    out_path = out_dir.joinpath(
-            f"results_{listing_name}" + \
-            f"_{sday.strftime('%Y%m%d')}" + \
-            f"_{eday.strftime('%Y%m%d')}.pkl"
-            )
-
+    lkey = f"{listing_name}" + \
+        f"_{sday.strftime('%Y%m%d')}" + \
+        f"_{eday.strftime('%Y%m%d')}"
+    listing_path = listing_dir.joinpath(f"listing_{lkey}.pkl")
 
     ## build a listing if requested, or used a matching stored one
     if new_listing or not listing_path.exists():
@@ -590,21 +573,53 @@ if __name__=="__main__":
                 if mkey not in metadata.keys():
                     metadata[mkey] = meta[mkey]
             for rkey in tmp_res.keys():
+                out_path = out_dir.joinpath(
+                    "_".join([lkey,*rkey])+".pkl")
                 if rkey not in results.keys():
-                    results[rkey] = tmp_res[rkey]
+                    results[rkey] = out_path
+                    pkl.dump((tmp_res[rkey],metadata), out_path.open("wb"))
                 else:
-                    new = {}
-                    prv = results[rkey]
+                    prv,_ = pkl.load(out_path.open("rb"))
                     cur = tmp_res[rkey]
                     assert prv["count"].shape==cur["count"].shape
-                    new["count"] = prv["count"] + cur["count"]
+                    mv_prv = prv["count"] > 0
+                    mv_cur = cur["count"] > 0
+                    mv_both = mv_prv & mv_cur
+                    mv_only_cur = mv_cur & ~mv_prv
+                    mv_only_prv = mv_prv & ~mv_cur
+
+                    new = {
+                        "count":prv["count"] + cur["count"],
+                        "mean":np.full(mv_prv.shape, np.nan, dtype=np.float32),
+                        "min":np.full(mv_prv.shape, np.nan, dtype=np.float32),
+                        "max":np.full(mv_prv.shape, np.nan, dtype=np.float32),
+                        "m2":np.full(mv_prv.shape, np.nan, dtype=np.float32),
+                        }
+                    new["mean"][mv_only_cur] = cur["mean"][mv_only_cur]
+                    new["min"][mv_only_cur] = cur["min"][mv_only_cur]
+                    new["max"][mv_only_cur] = cur["max"][mv_only_cur]
+                    new["m2"][mv_only_cur] = cur["m2"][mv_only_cur]
+                    new["mean"][mv_only_prv] = prv["mean"][mv_only_prv]
+                    new["min"][mv_only_prv] = prv["min"][mv_only_prv]
+                    new["max"][mv_only_prv] = prv["max"][mv_only_prv]
+                    new["m2"][mv_only_prv] = prv["m2"][mv_only_prv]
+
+                    for k in cur.keys():
+                        cur[k] = cur[k][mv_both]
+                        prv[k] = prv[k][mv_both]
+
                     d1 = cur["mean"] - prv["mean"]
                     d2 = d1 * d1
-                    new["mean"] = (cur["count"]*cur["mean"] \
-                        +prv["count"]*prv["mean"]) / new["count"]
-                    new["m2"] = cur["m2"] + prv["m2"] + \
-                        d2*(cur["count"]*prv["count"])/new["count"]
-                    results[rkey] = new
-            print(f"Updated: {list(tmp_res.keys())}")
-            pkl.dump((results,metadata), out_path.open("wb"))
+                    new["mean"][mv_both] = (cur["count"]*cur["mean"] \
+                            + prv["count"]*prv["mean"]) \
+                            / new["count"][mv_both]
+                    new["m2"][mv_both] = cur["m2"]+prv["m2"]\
+                            + d2*(cur["count"]*prv["count"]) \
+                            / new["count"][mv_both]
+                    new["max"][mv_both] = np.where(
+                            cur["max"]>prv["max"], cur["max"], prv["max"])
+                    new["min"][mv_both] = np.where(
+                            cur["min"]<prv["min"], cur["min"], prv["min"])
+                    pkl.dump((new,metadata), out_path.open("wb"))
+            gc.collect()
     exit(0)
