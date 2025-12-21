@@ -58,10 +58,10 @@ Cloud mask (L2 ACMC)
 
 **L1B data available on AWS** (at least intermittently)
 
-GOES-16 (East): 20170228 - 20250407
-GOES-17 (West): 20180828 - 20230110
-GOES-18 (West): 20220512 - present
-GOES-19 (East): 20241010 - present
+- GOES-16 (East): 20170228 - 20250407
+- GOES-17 (West): 20180828 - 20230110
+- GOES-18 (West): 20220512 - present
+- GOES-19 (East): 20241010 - present
 
 **official orbital transition plans**
 
