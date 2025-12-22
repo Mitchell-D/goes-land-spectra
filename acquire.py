@@ -121,8 +121,11 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
     TODO: add bucket to listing so multiple platforms' data can be acquired
         at the same time
     """
+    if debug:
+        t0 = time.perf_counter()
     rad_results = {}
     metadata = {}
+    px_counter = 0
     ## listing has one set of files for each unique time step
     for (dstr,_,sstr),keys in listing:
         paths = acquire_goes_files(
@@ -135,10 +138,9 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
         rad_paths = [] ## list of 2-tuples (channel, path)
         for p in paths:
             ptype = p.stem.split("_")[1]
-            if ptype == "ABI-L2-LSTC-M3":
+            if "LSTC" in ptype:
                 lmask_path = p
             else:
-                print(ptype.split("-")[:3])
                 assert ptype.split("-")[:3] == ["ABI","L1b","RadC"]
                 rad_paths.append((ptype[-3:], p))
         assert not lmask_path is None
@@ -225,8 +227,10 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
                     "count":np.full(tmp_size, 0, dtype=np.float64),
                     "min":np.full(tmp_size, np.nan, dtype=np.float32),
                     "max":np.full(tmp_size, np.nan, dtype=np.float32),
-                    "mean":np.full(tmp_size, np.nan, dtype=np.float32),
+                    "m1":np.full(tmp_size, np.nan, dtype=np.float32),
                     "m2":np.full(tmp_size, np.nan, dtype=np.float32),
+                    "m3":np.full(tmp_size, np.nan, dtype=np.float32),
+                    "m4":np.full(tmp_size, np.nan, dtype=np.float32),
                     }
             if fac==1:
                 m_dom_tmp = m_domain
@@ -236,33 +240,99 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
                 m_dom_tmp = np.repeat(m_dom_tmp, fac, axis=1)
                 m_rad_tmp = np.repeat(m_rad, fac, axis=0)
                 m_rad_tmp = np.repeat(m_rad_tmp, fac, axis=1)
-            sub_rad = rad[m_dom_tmp]
-            #m_sub = np.where(m_rad_tmp[m_dom_tmp])[0]
-            #m_sub = (m_rad_tmp[m_dom_tmp]&np.isfinite(sub_rad)) & (sub_rad>0)
-            m_sub = m_rad_tmp[m_dom_tmp]
 
-            rad_results[rkey]["count"][m_sub] += 1
-            m_first = m_sub & (rad_results[rkey]["count"] == 1)
+            m_sub = m_rad_tmp[m_dom_tmp] ## valid pixels in the domain
+            sub_rad = rad[m_dom_tmp][m_sub] ## radiance in the domain
+
+            ## initialize first valid pixels
+            m_first = m_sub & (rad_results[rkey]["count"] == 0)
             if np.any(m_first):
-                rad_results[rkey]["mean"][m_first] = sub_rad[m_first]
-                rad_results[rkey]["min"][m_first] = sub_rad[m_first]
-                rad_results[rkey]["max"][m_first] = sub_rad[m_first]
+                rad_results[rkey]["min"][m_first] = sub_rad[m_first[m_sub]]
+                rad_results[rkey]["max"][m_first] = sub_rad[m_first[m_sub]]
+                rad_results[rkey]["m1"][m_first] = sub_rad[m_first[m_sub]]
                 rad_results[rkey]["m2"][m_first] = 0.
+                rad_results[rkey]["m3"][m_first] = 0.
+                rad_results[rkey]["m4"][m_first] = 0.
 
+            ## substitute minimum and maximum
             rad_results[rkey]["max"][m_sub] = np.nanmin(
-                    [rad_results[rkey]["max"][m_sub], sub_rad[m_sub]], axis=0)
+                    [rad_results[rkey]["max"][m_sub], sub_rad], axis=0)
             rad_results[rkey]["min"][m_sub] = np.nanmin(
-                    [rad_results[rkey]["min"][m_sub], sub_rad[m_sub]], axis=0)
+                    [rad_results[rkey]["min"][m_sub], sub_rad], axis=0)
 
-            d1 = sub_rad[m_sub] - rad_results[rkey]["mean"][m_sub]
+            ## increment the count
+            count_prev = rad_results[rkey]["count"][m_sub]
+            count_now = count_prev + 1
+            rad_results[rkey]["count"][m_sub] = count_now
+
+            ## get references to current moments needed for calculation
+            m1 = rad_results[rkey]["m1"][m_sub]
+            m2 = rad_results[rkey]["m2"][m_sub]
+            m3 = rad_results[rkey]["m3"][m_sub]
+
+            ## calculate coefficients based on current mean and counts
+            d = sub_rad - m1
+            d_n = d / count_now
+            d_n2 = d_n * d_n
+            c1 = d * d_n * count_prev
+
+            ## update the moments using the terriberry extension of the formula
+            ## (original source discontinued, but i found it on wikipedia)
+            rad_results[rkey]["m1"][m_sub] += d_n
+            rad_results[rkey]["m4"][m_sub] += c1 * d_n2 * (
+                    count_now**2 - 3*count_now + 3
+                    ) + 6 * d_n2 * m2 - 4 * d_n * m3
+            rad_results[rkey]["m3"][m_sub] += c1 * d_n \
+                    * (count_now - 2) - 3 * d_n * m2
+            rad_results[rkey]["m2"][m_sub] += c1
+
+            '''
+            d1 = sub_rad - rad_results[rkey]["mean"][m_sub]
             rad_results[rkey]["mean"][m_sub] += d1 \
                     / rad_results[rkey]["count"][m_sub]
-            d2 = sub_rad[m_sub] - rad_results[rkey]["mean"][m_sub]
+            d2 = sub_rad - rad_results[rkey]["mean"][m_sub]
             rad_results[rkey]["m2"][m_sub] += d1*d2
-    if delete_files:
-        for p in paths:
-            p.unlink()
+            '''
+
+            if debug:
+                px_counter += np.count_nonzero(m_sub)
+        if delete_files:
+            for p in paths:
+                p.unlink()
+    if debug:
+        dt = time.perf_counter() - t0
+        print(f"worker px/sec: {px_counter/dt}")
     return rad_results,metadata ## assumes metadata consistent
+
+def merge_welford(w1, w2):
+    """
+    given 2 dicts containing arbitrary but equally shaped arrays for keys
+    "count", "m1", "m2", "m3", "m4", merges them using the Terribery
+    adaptation of the welford algorithm for higher order moments
+    """
+    d1 = w1["m1"] - w2["m1"]
+    d2 = d1 * d1
+    d3 = d1 * d2
+    d4 = d2 * d2
+    cnew = w1["count"] + w2["count"]
+
+    new = {}
+    new["count"] = cnew
+    new["m1"] = (w1["count"] * w1["m1"] + w2["count"] * w2["m1"]) / cnew
+
+    new["m2"] = w1["m2"] + w2["m2"] + d2 * w1["count"] * w2["count"] / cnew
+
+    new["m3"] = w1["m3"] + w2["m3"] \
+        + d3*w1["count"]*w2["count"] * (w1["count"]-w2["count"]) / cnew**2 \
+        + 3*d1 * (w1["count"] * w2["m2"] - w2["count"] * w1["m2"]) / cnew
+
+    c1 = w1["count"]**2 - w1["count"] * w2["count"] + w2["count"]**2
+    c2 = w1["m2"] * w2["count"]**2 + w2["m2"] * w1["count"]**2
+    new["m4"] = w1["m4"] + w2["m4"] \
+        + d4 * w1["count"] * w2["count"] * c1 / (cnew**3) \
+        + 6 * d2 * c2 / cnew**2 \
+        + 4 * d1 * (w1["count"] * w2["m3"] - w2["count"] * w1["m3"]) / cnew
+    return new
 
 def get_abi_l1b_radiance(nc_file:Path, get_mask:bool=False, _ds=None):
     """
@@ -387,7 +457,7 @@ def list_goes_day(date, products, time_offset_threshold:timedelta,
     ## Query the aws bucket to identify keys for the products that are actually
     ## available closest to the requested times.
     for prod,bands_tods in products:
-        assert prod in valid_goes_products
+        assert prod in valid_goes_products, prod
         hours_bands_times = {}
         ## make a dict hour -> band -> times to fit the bucket structure
         for b,t in bands_tods:
@@ -459,41 +529,68 @@ def list_goes_day(date, products, time_offset_threshold:timedelta,
     return downloads
 
 if __name__=="__main__":
+    proj_root = Path("/rhome/mdodson/goes-land-spectra")
     ## directory where downloaded files will be buffered.
-    download_dir = Path("data/downloads")
+    download_dir = proj_root.joinpath("data/downloads")
     ## directory where domain arrays will be stored.
-    geom_dir = Path("data/domains")
+    geom_dir = proj_root.joinpath("data/domains")
     ## directory where pkls of listings will be stored.
-    listing_dir = Path("data/listings")
-    out_dir = Path("data/results")
+    listing_dir = proj_root.joinpath("data/listings")
+    out_dir = proj_root.joinpath("data/results")
 
+    """
+    GOES-16 (East): 20170228 - 20250407
+    GOES-17 (West): 20180828 - 20230110
+    GOES-18 (West): 20220512 - present
+    GOES-19 (East): 20241010 - present
+    """
     ## start and end day for data listing
-    goes_version = 16
-    #sday = datetime(2019,3,15)
-    #eday = datetime(2019,4,1)
-    sday = datetime(2018,1,1)
-    eday = datetime(2022,12,31)
+    gver = 16
+    #sday,eday,gver = datetime(2018,1,1),datetime(2022,12,31) ## test period
+
+    #sday,eday,gver = datetime(2017,7,1),datetime(2024,6,30),16 ## 7y 16E
+    #sday,eday,gver = datetime(2019,1,1),datetime(2021,12,31),17 ## 3y 17W
+    #sday,eday,gver = datetime(2022,7,1),datetime(2025,6,30),18 ## 3y 18W
+    sday,eday,gver = datetime(2024,10,15),datetime(2025,3,15),19 ## <1y 19C
 
     ## L1b radiance bands to acquire
     l1b_bands = [1,2,3,5,6,7,13,15]
 
     ## UTC hours of the day to capture shortwave and longwave radiances
     swtimes = [timedelta(hours=t) for t in [12,15,18,21,0]]
-    lwtimes = [timedelta(hours=t) for t in [12,15,18,21,0,3,6,9]]
+    #lwtimes = [timedelta(hours=t) for t in [12,15,18,21,0,3,6,9]]
+    lwtimes = swtimes ## for now, no night pixels. need night-specific masking
 
     ## maximum error in closest file time before timestep is invalidated
     dt_thresh_mins = 5
-    #nworkers = 4
-    nworkers = 3
-    batch_size = 2 ## number of timesteps at once per worker
+    #nworkers,batch_size = 4,2
+
+    ## CONCLUSION: at least on hpc, large batch sizes are optimal to prevent
+    ## over-taxing the head node.
+
+    #nworkers,batch_size = 24,2 ## ~25min on meteor, head node very taxed
+
+    ## on meteor, head update:.4, head dump:.2, worker ~2e6 px/sec inc. DL
+    #nworkers,batch_size = 6,8 ## ~10min
+
+    ## on meteor, head calc:~5.5sec sometimes, worker ~2e6 px/sec inc. DL
+    ## very backed up head queue at the end
+    #nworkers,batch_size = 12,4 ## ~11.5min
+
+    ## on meteor, head calc:~5.5s sometimes, worker ~3e6 px/sec NOT inc. DL
+    #nworkers,batch_size = 12,16 ## ~4min
+
+    ## on meteor, head calc:~6.5s sometimes, worker ~5e6 px/sec NOT inc. DL
+    nworkers,batch_size = 8,24 ##
 
     ## identifying name of this dataset for the listing pkl
-    listing_name = f"goes{goes_version}_clearland-l1b-c0" ## lmask&l1b combo 0
+    listing_name = f"goes{gver}_clearland-l1b-c0" ## lmask&l1b combo 0
 
     new_listing = False
     debug = True
     redownload = False
-    delete_after_use = True
+    delete_after_use = True ## look into storing compressed in-domain arrays
+    overwrite_results = False
 
     """ ---------------- ( end normal configuration ) ---------------- """
 
@@ -523,9 +620,9 @@ if __name__=="__main__":
         ## map product to list of 2-tuple combos of bands with times of the day
         ## to acquire that band (as a timedelta, may be fractional hours)
         products=[
-            #(GP(str(goes_version), "ABI", "L2", "ACMC"), acmc_bands_hours),
-            (GP(str(goes_version), "ABI", "L2", "LSTC"), lst_bands_hours),
-            (GP(str(goes_version), "ABI", "L1b", "RadC"), l1b_bands_hours),
+            #(GP(str(gver), "ABI", "L2", "ACMC"), acmc_bands_hours),
+            (GP(str(gver), "ABI", "L2", "LSTC"), lst_bands_hours),
+            (GP(str(gver), "ABI", "L1b", "RadC"), l1b_bands_hours),
             ]
         args = [{
             "date":d,
@@ -552,12 +649,20 @@ if __name__=="__main__":
             print(f"Loading existing listing {listing_path.name}")
         _,listing = pkl.load(listing_path.open("rb"))
 
-    ##
+    ## if a list of files that have already been acquired is present and the
+    ## user doesn't want to repeat the results, negate the associated timesteps
+    loaded = []
+    acq_path = out_dir.joinpath(f"acquired_{lkey}.pkl")
+    if acq_path.exists() and not overwrite_results:
+        loaded = pkl.load(acq_path.open("rb"))
+        print(f"ignoring {len(loaded)} already-loaded timesteps")
+    listing = list(filter(lambda l:l[0] not in loaded, listing))
+
     batches = len(listing) // batch_size + bool(len(listing) % batch_size)
     args = [{
         "geom_dir":geom_dir,
         "download_dir":download_dir,
-        "bucket":f"noaa-goes{goes_version}",
+        "bucket":f"noaa-goes{gver}",
         "listing":listing[bix*batch_size:bix*batch_size+batch_size],
         "replace_files":redownload,
         "delete_files":delete_after_use,
@@ -565,22 +670,46 @@ if __name__=="__main__":
         "masks_to_apply":["m_valid", "m_clear", "m_vza", "m_land"],
         } for bix in range(batches)]
 
-    results = {} ## (geom,month,tod,band)
+    ## use the pkl naming scheme to point to existing results if requested
+    results = {} ## rkey:(geom,month,tod,band)
+    if not overwrite_results:
+        for p in out_dir.iterdir():
+            sat,lk,ts0,tsf,gstr,mstr,sstr,bstr = p.stem.split("_")
+            rkey = (gstr,mstr,sstr,bstr)
+            tmp_lkey = "_".join((sat,lk,ts0,tsf))
+            ## skip listings that don't match this one
+            if not tmp_lkey == lkey:
+                continue
+            results[rkey] = p
+
+    ## download and extract
     metadata = {} ## (geom,band)
     with Pool(nworkers, initializer=init_mp_get_goes_l1b_and_masks) as pool:
         for arg,(tmp_res,meta) in pool.imap_unordered(
                 mp_get_goes_l1b_and_masks, args):
+            if debug:
+                t0 = time.perf_counter()
+                loadtimes = []
             for mkey in meta.keys():
                 if mkey not in metadata.keys():
                     metadata[mkey] = meta[mkey]
             for rkey in tmp_res.keys():
-                out_path = out_dir.joinpath(
-                    "_".join([lkey,*rkey])+".pkl")
+                out_path = out_dir.joinpath("_".join([lkey,*rkey])+".pkl")
+                cur = tmp_res[rkey]
+                prv,new = None,None
+                ## if rkey isn't present, then either an overwrite is
+                ## requested, or no data has been loaded yet
                 if rkey not in results.keys():
                     results[rkey] = out_path
-                    pkl.dump((tmp_res[rkey],metadata), out_path.open("wb"))
+                    new = cur
+                ## otherwise load and update the pkl file
                 else:
+                    if debug:
+                        tl1 = time.perf_counter()
                     prv,_ = pkl.load(out_path.open("rb"))
+                    if debug:
+                        loadtimes.append(time.perf_counter()-tl1)
+                        print(f"head load: {loadtimes[-1]}")
                     cur = tmp_res[rkey]
                     assert prv["count"].shape==cur["count"].shape
                     mv_prv = prv["count"] > 0
@@ -591,38 +720,66 @@ if __name__=="__main__":
 
                     new = {
                         "count":prv["count"] + cur["count"],
-                        "mean":np.full(mv_prv.shape, np.nan, dtype=np.float32),
                         "min":np.full(mv_prv.shape, np.nan, dtype=np.float32),
                         "max":np.full(mv_prv.shape, np.nan, dtype=np.float32),
+                        "m1":np.full(mv_prv.shape, np.nan, dtype=np.float32),
                         "m2":np.full(mv_prv.shape, np.nan, dtype=np.float32),
+                        "m3":np.full(mv_prv.shape, np.nan, dtype=np.float32),
+                        "m4":np.full(mv_prv.shape, np.nan, dtype=np.float32),
                         }
-                    new["mean"][mv_only_cur] = cur["mean"][mv_only_cur]
-                    new["min"][mv_only_cur] = cur["min"][mv_only_cur]
-                    new["max"][mv_only_cur] = cur["max"][mv_only_cur]
-                    new["m2"][mv_only_cur] = cur["m2"][mv_only_cur]
-                    new["mean"][mv_only_prv] = prv["mean"][mv_only_prv]
-                    new["min"][mv_only_prv] = prv["min"][mv_only_prv]
-                    new["max"][mv_only_prv] = prv["max"][mv_only_prv]
-                    new["m2"][mv_only_prv] = prv["m2"][mv_only_prv]
+                    if np.any(mv_only_cur):
+                        new["min"][mv_only_cur] = cur["min"][mv_only_cur]
+                        new["max"][mv_only_cur] = cur["max"][mv_only_cur]
+                        new["m1"][mv_only_cur] = cur["m1"][mv_only_cur]
+                        new["m2"][mv_only_cur] = cur["m2"][mv_only_cur]
+                        new["m3"][mv_only_cur] = cur["m3"][mv_only_cur]
+                        new["m4"][mv_only_cur] = cur["m4"][mv_only_cur]
+                    if np.any(mv_only_prv):
+                        new["min"][mv_only_prv] = prv["min"][mv_only_prv]
+                        new["max"][mv_only_prv] = prv["max"][mv_only_prv]
+                        new["m1"][mv_only_prv] = prv["m1"][mv_only_prv]
+                        new["m2"][mv_only_prv] = prv["m2"][mv_only_prv]
+                        new["m3"][mv_only_prv] = prv["m3"][mv_only_prv]
+                        new["m4"][mv_only_prv] = prv["m4"][mv_only_prv]
+                    if np.any(mv_both):
+                        for k in cur.keys():
+                            cur[k] = cur[k][mv_both]
+                            prv[k] = prv[k][mv_both]
 
-                    for k in cur.keys():
-                        cur[k] = cur[k][mv_both]
-                        prv[k] = prv[k][mv_both]
+                        tmp = merge_welford(cur,prv)
+                        for k in ["count", "m1", "m2", "m3", "m4"]:
+                            new[k][mv_both] = tmp[k]
 
-                    d1 = cur["mean"] - prv["mean"]
-                    d2 = d1 * d1
-                    new["mean"][mv_both] = (cur["count"]*cur["mean"] \
-                            + prv["count"]*prv["mean"]) \
-                            / new["count"][mv_both]
-                    new["m2"][mv_both] = cur["m2"]+prv["m2"]\
-                            + d2*(cur["count"]*prv["count"]) \
-                            / new["count"][mv_both]
-                    new["max"][mv_both] = np.where(
-                            cur["max"]>prv["max"], cur["max"], prv["max"])
-                    new["min"][mv_both] = np.where(
-                            cur["min"]<prv["min"], cur["min"], prv["min"])
-                    pkl.dump((new,metadata), out_path.open("wb"))
+                        new["min"][mv_both] = np.where(
+                                cur["min"] < prv["min"],
+                                cur["min"], prv["min"])
+                        new["max"][mv_both] = np.where(
+                                cur["max"] < prv["max"],
+                                cur["max"], prv["max"])
+                        '''
+                        d1 = cur["mean"] - prv["mean"]
+                        d2 = d1 * d1
+                        new["mean"][mv_both] = (cur["count"]*cur["mean"] \
+                                + prv["count"]*prv["mean"]) \
+                                / new["count"][mv_both]
+                        new["m2"][mv_both] = cur["m2"]+prv["m2"]\
+                                + d2*(cur["count"]*prv["count"]) \
+                                / new["count"][mv_both]
+                        new["max"][mv_both] = np.where(
+                                cur["max"]>prv["max"], cur["max"], prv["max"])
+                        new["min"][mv_both] = np.where(
+                                cur["min"]<prv["min"], cur["min"], prv["min"])
+                        '''
+                if debug:
+                    dc0 = time.perf_counter()
+                    dt = dc0 - t0
+                    print(f"head calc: {dt-sum(loadtimes)}")
+                pkl.dump((new,metadata), out_path.open("wb"))
+                if debug:
+                    dt = time.perf_counter() - dc0
+                    print(f"head dump: {dt}")
+
+                ## try to free some memory (please do it, garbage collector)
                 prv,cur,new,mv_prv,mv_cur,mv_both,mv_only_cur,mv_only_prv = \
                         [None]*8
-                gc.collect()
-    exit(0)
+                gc.collect() ## please please

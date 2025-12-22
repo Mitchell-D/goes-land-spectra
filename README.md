@@ -24,6 +24,16 @@ histograms for each pixel in a subset of bands.
 - histograms per pixel/month at several times per day (?)
   this is pretty expensive. Maybe focus on narrower problem.
 
+**research topics**
+
+-
+- investigate the homogeneity of LST anomaly. Use it to build a regression
+  model for clear-sky temperature fluctuation. (preferably without severely
+  discretizing sfc classes).
+  - calibrate to SCAN ground stations?
+- classify out-of-distribution events over different regions
+- sub-pixel cloud characterization from multi-satellite observations
+
 **not gonna work (yet)**
 
 - quantile estimation is difficult... seems like for single-pass
