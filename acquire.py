@@ -16,6 +16,85 @@ from GeosGeom import GeosGeom
 from GOESProduct import GOESProduct as GP
 from GOESProduct import valid_goes_products
 
+def load_welford_grids(pkl_paths:list, geom_dir:Path,
+        metrics=None, merge=False, res_factor=1):
+    """
+    Load and re-grid GOES welford pkls
+
+    :@param pkl_paths: list of pkl paths to open and optionally regrid
+    :@param geom_dir: dir where geometry pkls matching the paths are found
+    :@param metrics: list of metrics to extract. default to all of them.
+    :@param merge: If True, statistics from all pkls will be merged together
+    :@param regrid: If True,
+
+    :@return: (out_array, m_domain, geos_geom, features) where out_array has
+        shape (P,F,M) if regrid is False, (Y,X,F,M) otherwise. P are in-domain
+        pixels, Y/X are lat/lon dimensions, F are the unique combinations
+    """
+    all_metrics = ["count", "min", "max", "m1", "m2", "m3", "m4"]
+    if not isinstance(pkl_paths, (list,tuple)):
+        pkl_paths = [Path(pkl_paths)]
+    if metrics is None:
+        metrics = all_metrics
+    tups = [p.stem.split("_") for p in pkl_paths]
+    domains = list(zip(*tups))[4]
+    assert all(d==domains[0] for d in domains[1:]),domains
+    gg,m_domain = load_geos_geom(geom_dir.joinpath(f"{domains[0]}.pkl"))
+    domy,domx = m_domain.shape
+    out_shape = (domy,domx,[len(pkl_paths),1][merge])
+
+    ## TODO: regrid by default, after applying optional latlon subset.
+    ## also finish upscaling/downscaling code
+
+    '''
+    new = {
+        "count":prv["count"] + cur["count"],
+        "min":np.full(out_shape, np.nan, dtype=np.float32),
+        "max":np.full(out_shape, np.nan, dtype=np.float32),
+        "m1":np.full(out_shape, np.nan, dtype=np.float32),
+        "m2":np.full(out_shape, np.nan, dtype=np.float32),
+        "m3":np.full(out_shape, np.nan, dtype=np.float32),
+        "m4":np.full(out_shape, np.nan, dtype=np.float32),
+        }
+    '''
+
+    tmpr = []
+    target_fac = res_factor
+    for p in pkl_paths:
+        res,meta = pkl.load(p.open("rb"))
+        cury,curx = res["count"].shape
+
+        cur_fac_dom = None
+        if domy==cury and domx==curx:
+            cur_fac_dom = 1
+        else:
+            yfac = cury // domy
+            xfac = curx // domx
+            assert cury % domy == 0
+            assert curx % domx == 0
+            assert yfac==xfac, "should always be true for GOES"
+            cur_fac_dom = yfac
+
+        tmpr = []
+        if cur_fac_dom == target_fac:
+            tmpr.append(res)
+        elif cur_fac_dom < target_fac:
+            rfac = target_fac // cur_fac_dom
+            assert target_fac % rfac == 0
+        else:
+            rfac = cur_fac_dom // target_fac
+            assert target_fac % rfac == 0
+            for mk in all_metrics:
+                 res[mk] = np.all(as_strided(
+                    res[mk],
+                    shape=(domy,domx,yfac,xfac),
+                    strides=(
+                        res[mk].strides[0]*yfac, res[mk].strides[1]*yfac,
+                        res[mk].strides[0], res[mk].strides[1]
+                        ),
+                    ), axis=(2,3))
+
+
 def init_mp_get_goes_l1b_and_masks():
     ## semaphor for the geom pkl index, which is captured on read and write
     global geom_index_lock
@@ -545,13 +624,12 @@ if __name__=="__main__":
     GOES-19 (East): 20241010 - present
     """
     ## start and end day for data listing
-    gver = 16
     #sday,eday,gver = datetime(2018,1,1),datetime(2022,12,31) ## test period
 
-    #sday,eday,gver = datetime(2017,7,1),datetime(2024,6,30),16 ## 7y 16E
+    sday,eday,gver = datetime(2017,7,1),datetime(2024,6,30),16 ## 7y 16E
     #sday,eday,gver = datetime(2019,1,1),datetime(2021,12,31),17 ## 3y 17W
     #sday,eday,gver = datetime(2022,7,1),datetime(2025,6,30),18 ## 3y 18W
-    sday,eday,gver = datetime(2024,10,15),datetime(2025,3,15),19 ## <1y 19C
+    #sday,eday,gver = datetime(2024,10,15),datetime(2025,3,15),19 ## <1y 19C
 
     ## L1b radiance bands to acquire
     l1b_bands = [1,2,3,5,6,7,13,15]

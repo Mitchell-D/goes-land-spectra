@@ -36,7 +36,7 @@ class GeosGeom:
         self.e_w_scan_angles = e_w_scan_angles
         self.n_s_scan_angles = n_s_scan_angles
         self.sweep_angle_axis = sweep_angle_axis
-        self._lons, self._lats = self.gen_earth_locations()
+        self._lats,self._lons = self.get_latlon()
         self._vzas = None
 
     def __repr__(self):
@@ -51,7 +51,7 @@ class GeosGeom:
                 f"SIZE: {self._lons.size}  " + \
                 f"NaNs: {np.count_nonzero(np.isnan(self._lons))}"
 
-    def get_closest_latlon(self, lat, lon):
+    def get_nearest_indeces(self, lat, lon):
         """ returns the index of the pixel closest to the provided lat/lon """
         masked_lats = np.nan_to_num(self._lats, 999999)
         masked_lons = np.nan_to_num(self._lons, 999999)
@@ -102,8 +102,8 @@ class GeosGeom:
         lr_latlon[0], ul_latlon[0] = sorted(lat_range)
         ul_latlon[1], lr_latlon[1] = sorted(lon_range)
         lr_latlon, ul_latlon = zip(lat_range, lon_range[::-1])
-        ul_index = self.get_closest_latlon(*ul_latlon)
-        lr_index = self.get_closest_latlon(*lr_latlon)
+        ul_index = self.get_nearest_indeces(*ul_latlon)
+        lr_index = self.get_nearest_indeces(*lr_latlon)
 
         if _debug:
             print("requested lat range: ",lat_range)
@@ -114,6 +114,11 @@ class GeosGeom:
                   (self._lats[lr_index], self._lons[lr_index]))
 
         return tuple(zip(ul_index, lr_index))
+
+    @property
+    def latlon(self) -> np.array:
+        """ :return: 1d numpy array of latitude values in degrees """
+        return np.stack([self._lats,self._lons],axis=-1)
 
     @property
     def lats(self) -> np.array:
@@ -131,10 +136,10 @@ class GeosGeom:
         Viewing zenith angle getter
         """
         if self._vzas is None:
-            self._vzas = self.gen_viewing_zenith_angles()
+            self._vzas = self.get_viewing_zenith_angles()
         return self._vzas
 
-    def gen_earth_locations(self, use_pyproj:bool=False)->(np.array, np.array):
+    def get_latlon(self, use_pyproj:bool=False)->(np.array, np.array):
         """
         Calculate latitude, longitude (degrees) values from GOES ABI fixed
         grid (radians).
@@ -165,16 +170,6 @@ class GeosGeom:
             #proj = Proj(proj='geos',h=str(), lon_0=str(lon_origin),
             #            sweep=sweep, R=self.R_e)
 
-        """
-        # Hacky way to get projection for a subset of the grid if the
-        # computer keeps running out of memory during trig operations
-        nscut = int(self.n_s_scan_angles.shape[0]/2)
-        ewcut = int(self.e_w_scan_angles.shape[1]/2)
-        sinlatr = np.sin(self.n_s_scan_angles[:nscut,:ewcut])
-        sinlonr = np.sin(self.e_w_scan_angles[:nscut,:ewcut])
-        coslatr = np.cos(self.n_s_scan_angles[:nscut,:ewcut])
-        coslonr = np.cos(self.e_w_scan_angles[:nscut,:ewcut])
-        """
         sinlatr = np.sin(self.n_s_scan_angles)
         sinlonr = np.sin(self.e_w_scan_angles)
         coslatr = np.cos(self.n_s_scan_angles)
@@ -217,9 +212,9 @@ class GeosGeom:
         print("lons size/nancount:",lons.size,
               np.count_nonzero(np.isnan(lons)))
         """
-        return lons.astype("float64"), lats.astype("float64")
+        return lats.astype("float64"),lons.astype("float64")
 
-    def gen_viewing_zenith_angles(self) -> np.array:
+    def get_viewing_zenith_angles(self) -> np.array:
         """
         Generate viewing zenith angles for each ABI fixed grid point
 
@@ -230,7 +225,6 @@ class GeosGeom:
         """
         r_eq = self.r_eq
         h = self.perspective_point_height + r_eq
-        theta_s = np.sqrt(self.e_w_scan_angles ** 2. + self.n_s_scan_angles **
-                          2.)
+        theta_s = np.sqrt(self.e_w_scan_angles**2 + self.n_s_scan_angles**2)
         vzas = np.degrees(np.arcsin((h / r_eq) * np.sin(theta_s)))
         return vzas
