@@ -7,7 +7,7 @@ from pprint import pprint
 
 from GeosGeom import GeosGeom
 from plotting import plot_geo_rgb,plot_geo_scalar
-from acquire import merge_welford
+from helpers import load_welford_grids
 
 class QueryResults:
     """
@@ -63,8 +63,8 @@ class QueryResults:
         return groups
 
 if __name__=="__main__":
-    #proj_root = Path("/rhome/mdodson/goes-land-spectra")
-    proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
+    proj_root = Path("/rhome/mdodson/goes-land-spectra")
+    #proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
     ## directory where domain arrays will be stored.
     geom_dir = proj_root.joinpath("data/domains")
     ## directory where pkls of listings will be stored.
@@ -74,15 +74,18 @@ if __name__=="__main__":
     name_fields = ["satellite","listing", "stime", "ftime",
             "domain", "month", "tod", "band"]
 
+    lat_bounds = (30,40)
+    lon_bounds = (-75,-95)
+
     ## result pkls are stratified by domain, listing, ToD and band
     include_only = {
-        #"domain":["geom-goes-conus-1"], ## G19E
-        "domain":["geom-goes-conus-0"], ## G19E
+        "domain":["geom-goes-conus-1"], ## G19E
+        #"domain":["geom-goes-conus-0"], ## G19E
         "listing":["clearland-l1b-c0"],
         #"tod":["64800"], ## in seconds, only 18z
         "tod":["54000","64800","75600"], ## in seconds, only 18z
-        #"month":["11","12","01"],
-        "month":["07",],
+        "month":["11","12","01"],
+        #"month":["07",],
         }
 
     plot_types = ["scalar", "rgb"]
@@ -107,7 +110,28 @@ if __name__=="__main__":
         qr = qr.subset(**tmp_incl)
         mrg_keys,mrg_paths = zip(*qr.group(merge_over, invert=True).items())
 
-        pprint(dict(zip(mrg_keys,mrg_paths)))
+        #pprint(dict(zip(mrg_keys,mrg_paths)))
+        print(mrg_keys)
+        print(len(mrg_paths))
+
+        for mrg_keys,mrg_paths in zip(mrg_keys,mrg_paths):
+            pprint(mrg_keys)
+            pprint(mrg_paths)
+            for p in mrg_paths:
+                print(p.as_posix())
+            exit(0)
+            load_welford_grids(
+                    pkl_paths=mrg_paths,
+                    geom_dir=geom_dir,
+                    lat_bounds=lat_bounds,
+                    lon_bounds=lon_bounds,
+                    subgrid_rule="complete",
+                    reduce_func=np.nanmean,
+                    metrics=None, ## TODO: implement metric subset after merge
+                    merge=True,
+                    res_factor=2,
+                    )
+            exit(0)
 
         ## narrow down result pkls to the requested combination
         '''

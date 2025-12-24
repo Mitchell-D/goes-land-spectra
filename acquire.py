@@ -15,118 +15,7 @@ from numpy.lib.stride_tricks import as_strided
 from GeosGeom import GeosGeom
 from GOESProduct import GOESProduct as GP
 from GOESProduct import valid_goes_products
-from helpers import merge_welford,get_latlon_slice_bounds
-
-def load_welford_grids(pkl_paths:list, geom_dir:Path,
-        lat_bounds=None, lon_bounds=None, subgrid_rule="complete",
-        reduce_func=np.nanmean, metrics=None, merge=False, res_factor=1):
-    """
-    Load and re-grid GOES welford pkls
-
-    :@param pkl_paths: list of pkl paths to open and optionally regrid
-    :@param geom_dir: dir where geometry pkls matching the paths are found
-    :@param metrics: list of metrics to extract. default to all of them.
-    :@param merge: If True, statistics from all pkls will be merged together
-    :@param regrid: If True,
-
-    :@return: (out_array, m_domain, geos_geom, features) where out_array has
-        shape (P,F,M) if regrid is False, (Y,X,F,M) otherwise. P are in-domain
-        pixels, Y/X are lat/lon dimensions, F are the unique combinations
-    """
-    all_metrics = ["count", "min", "max", "m1", "m2", "m3", "m4"]
-    if not isinstance(pkl_paths, (list,tuple)):
-        pkl_paths = [Path(pkl_paths)]
-    if metrics is None:
-        metrics = all_metrics
-
-    ## load the geographic domain for this
-    tups = [p.stem.split("_") for p in pkl_paths]
-    domains = list(zip(*tups))[4]
-    assert all(d==domains[0] for d in domains[1:]),domains
-    gg,m_domain = load_geos_geom(geom_dir.joinpath(f"{domains[0]}.pkl"))
-
-    ## find slices that describe the requested subgrid
-    slc_lat,slc_lon = get_latlon_slice_bounds(
-        lat=lat, lon=lon, lat_bounds=lat_bounds, lon_bounds=lon_bounds,
-        subgrid_rule=subgrid_rule, oob_value=np.nan)
-
-    ## calculate the shape of the domain subgrid
-    domy = slc_lat.stop - slc_lat.start
-    domx = slc_lon.stop - slc_lon.start #m_domain.shape
-    m_sub = m_valid[slc_lat,slc_lon]
-
-    out_shape = (
-        m_sub.shape[0]*res_factor,
-        m_sub.shape[1]*res_factor,
-        [len(pkl_paths),1][merge]
-        )
-    new = {
-        "count":prv["count"] + cur["count"],
-        "min":np.full(out_shape, np.nan, dtype=np.float32),
-        "max":np.full(out_shape, np.nan, dtype=np.float32),
-        "m1":np.full(out_shape, np.nan, dtype=np.float32),
-        "m2":np.full(out_shape, np.nan, dtype=np.float32),
-        "m3":np.full(out_shape, np.nan, dtype=np.float32),
-        "m4":np.full(out_shape, np.nan, dtype=np.float32),
-        }
-
-    res_merged = None
-    tgt_fac_dom = res_factor ## target px factor wrt domain (2km)
-    for j,p in enumerate(pkl_paths):
-        ## determine how many times larger along both axes the data array is
-        ## than the domain array
-        res,meta = pkl.load(p.open("rb"))
-        cury,curx = res["count"].shape
-
-        ## convert the domain valid mask to the current array size
-        cur_fac_dom = None
-        if domy==cury and domx==curx:
-            cur_fac_dom = 1
-            m_sub_tmp = np.copy(m_sub)
-        else:
-            yfac = cury // domy
-            xfac = curx // domx
-            assert cury % domy == 0
-            assert curx % domx == 0
-            assert yfac==xfac, "should always be true for GOES"
-            cur_fac_dom = yfac
-            ## adapt the subgrid mask to the target size
-            m_sub_tmp = np.repeat(m_sub, cur_fac_dom, axis=0)
-            m_sub_tmp = np.repeat(m_sub_tmp, cur_fac_dom, axis=1)
-
-        ## determine the size factor of the current array wrt the target
-        if cur_fac_dom == tgt_fac_dom:
-            pass
-        elif cur_fac_dom < tgt_fac_dom: ## expand current to target domain
-            ## current resolution must strictly divide target resolution
-            cur_fac_tgt = tgt_fac_dom // cur_fac_dom
-            for k in all_metrics:
-                res[k] = np.where(m_sub_tmp, res[k], np.nan)
-                res[k] = np.repeat(res[k], cur_fac_tgt, axis=0)
-                res[k] = np.repeat(res[k], cur_fac_tgt, axis=1)
-            assert tgt_fac_dom % cur_fac_tgt == 0
-        else: ## contract if the current is larger than the target domain
-            ## target resolution must strictly divide current resolution
-            cur_fac_tgt = cur_fac_dom // tgt_fac_dom
-            assert cur_fac_tgt % tgt_fac_dom == 0
-            for k in all_metrics:
-                res[k] = np.where(m_sub_tmp, res[k], np.nan)
-                res[k] = reduce_func(as_strided(
-                    res[k],
-                    shape=(out_shape[0],out_shape[1],cur_fac_tgt,cur_fac_tgt),
-                    strides=(res[k].strides[0]*yfac, res[k].strides[1]*yfac,
-                        res[k].strides[0], res[k].strides[1]),
-                        ), axis=(2, 3))
-        for k in all_metrics:
-            print(res[k].shape)
-        if merge:
-            if res_merged is None:
-                res_merged = res
-            else:
-                res_merged = merge_welford(res_merged, res)
-        else:
-            for k in all_metrics:
-                new[k][...,j] = res[k]
+from helpers import merge_welford
 
 def init_mp_get_goes_l1b_and_masks():
     ## semaphor for the geom pkl index, which is captured on read and write
@@ -139,25 +28,15 @@ def init_s3_session():
     global s3
     s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
 
-def parse_goes_stime(fname:str):
-    return datetime.strptime(fname.split("_")[3], "s%Y%j%H%M%S%f")
-
-def acquire_goes_files(bucket:str, keys:list, download_dir:Path,
-        replace=False, debug=False):
+def load_geos_geom_parallel(geom_pkl_path):
     """ """
-    out_paths = [download_dir.joinpath(k.split("/")[-1]) for k in keys]
-    if replace:
-        todl = zip(out_paths,keys)
-    else:
-        todl = list(filter(lambda pk:not pk[0].exists(), zip(out_paths,keys)))
-    for p,k in todl:
-        s3.download_file(bucket, k, p)
-    return out_paths
+    assert geom_pkl_path.exists()
+    with geom_index_lock:
+        ggargs,m_domain = pkl.load(geom_pkl_path.open("rb"))
+        gg = GeosGeom(**ggargs)
+    return gg,m_domain
 
-def mp_get_goes_l1b_and_masks(args):
-    return args,get_goes_l1b_and_masks(**args)
-
-def dump_geos_geom(geom_dir, cur_geom, nc_path, domain_mask=None):
+def dump_geos_geom_parallel(geom_dir, cur_geom, nc_path, domain_mask=None):
     """
     Multiprocess friendly function that maintains a directory of GeosGeom pkl
     files. The directory has an index file mapping basic projection values
@@ -218,13 +97,23 @@ def dump_geos_geom(geom_dir, cur_geom, nc_path, domain_mask=None):
     geom_index_lock.release()
     return geom_pkl_path
 
-def load_geos_geom(geom_pkl_path):
+def parse_goes_stime(fname:str):
+    return datetime.strptime(fname.split("_")[3], "s%Y%j%H%M%S%f")
+
+def acquire_goes_files(bucket:str, keys:list, download_dir:Path,
+        replace=False, debug=False):
     """ """
-    assert geom_pkl_path.exists()
-    with geom_index_lock:
-        ggargs,m_domain = pkl.load(geom_pkl_path.open("rb"))
-        gg = GeosGeom(**ggargs)
-    return gg,m_domain
+    out_paths = [download_dir.joinpath(k.split("/")[-1]) for k in keys]
+    if replace:
+        todl = zip(out_paths,keys)
+    else:
+        todl = list(filter(lambda pk:not pk[0].exists(), zip(out_paths,keys)))
+    for p,k in todl:
+        s3.download_file(bucket, k, p)
+    return out_paths
+
+def mp_get_goes_l1b_and_masks(args):
+    return args,get_goes_l1b_and_masks(**args)
 
 def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
         download_dir:Path, replace_files=False, delete_files=False,
@@ -270,13 +159,13 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
 
         ## atomically ensure the existence of and load the current satellite
         ## geometry and previous domain mask
-        geom_path = dump_geos_geom(
+        geom_path = dump_geos_geom_parallel(
                 geom_dir=geom_dir,
                 cur_geom=proj,
                 nc_path=lmask_path,
                 domain_mask=masks[mlabels.index("m_land")],
                 )
-        gg,m_domain = load_geos_geom(geom_path)
+        gg,m_domain = load_geos_geom_parallel(geom_path)
         domain_size = np.count_nonzero(m_domain)
 
         gkey = geom_path.stem
@@ -336,6 +225,7 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
                 tmp_size = domain_size * fac**2
                 rad_results[rkey] = {
                     ## float64 since it must be used as a denominator
+                    "shape":rad.shape,
                     "count":np.full(tmp_size, 0, dtype=np.float64),
                     "min":np.full(tmp_size, np.nan, dtype=np.float32),
                     "max":np.full(tmp_size, np.nan, dtype=np.float32),
@@ -344,6 +234,8 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
                     "m3":np.full(tmp_size, np.nan, dtype=np.float32),
                     "m4":np.full(tmp_size, np.nan, dtype=np.float32),
                     }
+
+            ## apply the domain mask, scaling it up if this array is larger
             if fac==1:
                 m_dom_tmp = m_domain
                 m_rad_tmp = m_rad
@@ -397,14 +289,6 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
             rad_results[rkey]["m3"][m_sub] += c1 * d_n \
                     * (count_now - 2) - 3 * d_n * m2
             rad_results[rkey]["m2"][m_sub] += c1
-
-            '''
-            d1 = sub_rad - rad_results[rkey]["mean"][m_sub]
-            rad_results[rkey]["mean"][m_sub] += d1 \
-                    / rad_results[rkey]["count"][m_sub]
-            d2 = sub_rad - rad_results[rkey]["mean"][m_sub]
-            rad_results[rkey]["m2"][m_sub] += d1*d2
-            '''
 
             if debug:
                 px_counter += np.count_nonzero(m_sub)
