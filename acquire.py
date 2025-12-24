@@ -15,9 +15,11 @@ from numpy.lib.stride_tricks import as_strided
 from GeosGeom import GeosGeom
 from GOESProduct import GOESProduct as GP
 from GOESProduct import valid_goes_products
+from helpers import merge_welford,get_latlon_slice_bounds
 
 def load_welford_grids(pkl_paths:list, geom_dir:Path,
-        metrics=None, merge=False, res_factor=1):
+        lat_bounds=None, lon_bounds=None, subgrid_rule="complete",
+        reduce_func=np.nanmean, metrics=None, merge=False, res_factor=1):
     """
     Load and re-grid GOES welford pkls
 
@@ -36,17 +38,28 @@ def load_welford_grids(pkl_paths:list, geom_dir:Path,
         pkl_paths = [Path(pkl_paths)]
     if metrics is None:
         metrics = all_metrics
+
+    ## load the geographic domain for this
     tups = [p.stem.split("_") for p in pkl_paths]
     domains = list(zip(*tups))[4]
     assert all(d==domains[0] for d in domains[1:]),domains
     gg,m_domain = load_geos_geom(geom_dir.joinpath(f"{domains[0]}.pkl"))
-    domy,domx = m_domain.shape
-    out_shape = (domy,domx,[len(pkl_paths),1][merge])
 
-    ## TODO: regrid by default, after applying optional latlon subset.
-    ## also finish upscaling/downscaling code
+    ## find slices that describe the requested subgrid
+    slc_lat,slc_lon = get_latlon_slice_bounds(
+        lat=lat, lon=lon, lat_bounds=lat_bounds, lon_bounds=lon_bounds,
+        subgrid_rule=subgrid_rule, oob_value=np.nan)
 
-    '''
+    ## calculate the shape of the domain subgrid
+    domy = slc_lat.stop - slc_lat.start
+    domx = slc_lon.stop - slc_lon.start #m_domain.shape
+    m_sub = m_valid[slc_lat,slc_lon]
+
+    out_shape = (
+        m_sub.shape[0]*res_factor,
+        m_sub.shape[1]*res_factor,
+        [len(pkl_paths),1][merge]
+        )
     new = {
         "count":prv["count"] + cur["count"],
         "min":np.full(out_shape, np.nan, dtype=np.float32),
@@ -56,17 +69,20 @@ def load_welford_grids(pkl_paths:list, geom_dir:Path,
         "m3":np.full(out_shape, np.nan, dtype=np.float32),
         "m4":np.full(out_shape, np.nan, dtype=np.float32),
         }
-    '''
 
-    tmpr = []
-    target_fac = res_factor
-    for p in pkl_paths:
+    res_merged = None
+    tgt_fac_dom = res_factor ## target px factor wrt domain (2km)
+    for j,p in enumerate(pkl_paths):
+        ## determine how many times larger along both axes the data array is
+        ## than the domain array
         res,meta = pkl.load(p.open("rb"))
         cury,curx = res["count"].shape
 
+        ## convert the domain valid mask to the current array size
         cur_fac_dom = None
         if domy==cury and domx==curx:
             cur_fac_dom = 1
+            m_sub_tmp = np.copy(m_sub)
         else:
             yfac = cury // domy
             xfac = curx // domx
@@ -74,26 +90,43 @@ def load_welford_grids(pkl_paths:list, geom_dir:Path,
             assert curx % domx == 0
             assert yfac==xfac, "should always be true for GOES"
             cur_fac_dom = yfac
+            ## adapt the subgrid mask to the target size
+            m_sub_tmp = np.repeat(m_sub, cur_fac_dom, axis=0)
+            m_sub_tmp = np.repeat(m_sub_tmp, cur_fac_dom, axis=1)
 
-        tmpr = []
-        if cur_fac_dom == target_fac:
-            tmpr.append(res)
-        elif cur_fac_dom < target_fac:
-            rfac = target_fac // cur_fac_dom
-            assert target_fac % rfac == 0
+        ## determine the size factor of the current array wrt the target
+        if cur_fac_dom == tgt_fac_dom:
+            pass
+        elif cur_fac_dom < tgt_fac_dom: ## expand current to target domain
+            ## current resolution must strictly divide target resolution
+            cur_fac_tgt = tgt_fac_dom // cur_fac_dom
+            for k in all_metrics:
+                res[k] = np.where(m_sub_tmp, res[k], np.nan)
+                res[k] = np.repeat(res[k], cur_fac_tgt, axis=0)
+                res[k] = np.repeat(res[k], cur_fac_tgt, axis=1)
+            assert tgt_fac_dom % cur_fac_tgt == 0
+        else: ## contract if the current is larger than the target domain
+            ## target resolution must strictly divide current resolution
+            cur_fac_tgt = cur_fac_dom // tgt_fac_dom
+            assert cur_fac_tgt % tgt_fac_dom == 0
+            for k in all_metrics:
+                res[k] = np.where(m_sub_tmp, res[k], np.nan)
+                res[k] = reduce_func(as_strided(
+                    res[k],
+                    shape=(out_shape[0],out_shape[1],cur_fac_tgt,cur_fac_tgt),
+                    strides=(res[k].strides[0]*yfac, res[k].strides[1]*yfac,
+                        res[k].strides[0], res[k].strides[1]),
+                        ), axis=(2, 3))
+        for k in all_metrics:
+            print(res[k].shape)
+        if merge:
+            if res_merged is None:
+                res_merged = res
+            else:
+                res_merged = merge_welford(res_merged, res)
         else:
-            rfac = cur_fac_dom // target_fac
-            assert target_fac % rfac == 0
-            for mk in all_metrics:
-                 res[mk] = np.all(as_strided(
-                    res[mk],
-                    shape=(domy,domx,yfac,xfac),
-                    strides=(
-                        res[mk].strides[0]*yfac, res[mk].strides[1]*yfac,
-                        res[mk].strides[0], res[mk].strides[1]
-                        ),
-                    ), axis=(2,3))
-
+            for k in all_metrics:
+                new[k][...,j] = res[k]
 
 def init_mp_get_goes_l1b_and_masks():
     ## semaphor for the geom pkl index, which is captured on read and write
@@ -382,36 +415,6 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
         dt = time.perf_counter() - t0
         print(f"worker px/sec: {px_counter/dt}")
     return rad_results,metadata ## assumes metadata consistent
-
-def merge_welford(w1, w2):
-    """
-    given 2 dicts containing arbitrary but equally shaped arrays for keys
-    "count", "m1", "m2", "m3", "m4", merges them using the Terribery
-    adaptation of the welford algorithm for higher order moments
-    """
-    d1 = w1["m1"] - w2["m1"]
-    d2 = d1 * d1
-    d3 = d1 * d2
-    d4 = d2 * d2
-    cnew = w1["count"] + w2["count"]
-
-    new = {}
-    new["count"] = cnew
-    new["m1"] = (w1["count"] * w1["m1"] + w2["count"] * w2["m1"]) / cnew
-
-    new["m2"] = w1["m2"] + w2["m2"] + d2 * w1["count"] * w2["count"] / cnew
-
-    new["m3"] = w1["m3"] + w2["m3"] \
-        + d3*w1["count"]*w2["count"] * (w1["count"]-w2["count"]) / cnew**2 \
-        + 3*d1 * (w1["count"] * w2["m2"] - w2["count"] * w1["m2"]) / cnew
-
-    c1 = w1["count"]**2 - w1["count"] * w2["count"] + w2["count"]**2
-    c2 = w1["m2"] * w2["count"]**2 + w2["m2"] * w1["count"]**2
-    new["m4"] = w1["m4"] + w2["m4"] \
-        + d4 * w1["count"] * w2["count"] * c1 / (cnew**3) \
-        + 6 * d2 * c2 / cnew**2 \
-        + 4 * d1 * (w1["count"] * w2["m3"] - w2["count"] * w1["m3"]) / cnew
-    return new
 
 def get_abi_l1b_radiance(nc_file:Path, get_mask:bool=False, _ds=None):
     """

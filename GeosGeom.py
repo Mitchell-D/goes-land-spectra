@@ -181,12 +181,9 @@ class GeosGeom:
 
         r_eq2 = r_eq * r_eq
         r_pol2 = r_pol * r_pol
-        a_var = (np.square(sinlonr) +
-                    (np.square(coslonr) *
-                        (np.square(coslatr) +
-                            ((r_eq2 / r_pol2) * np.square(sinlatr)))
-                     )
-                 )
+
+        v1 = np.square(coslatr) + r_eq2 * np.square(sinlatr) / r_pol2
+        a_var = np.square(sinlonr) + np.square(coslonr) * v1
 
         b_var = -2.0 * h * coslonr * coslatr
         c_var = h ** 2.0 - r_eq2
@@ -199,8 +196,6 @@ class GeosGeom:
         lats = np.degrees(np.arctan((r_eq2 / r_pol2) * s_z /
                                     np.sqrt((h_sx * h_sx) + (s_y * s_y))))
         lons = np.degrees(lambda_0 - np.arctan(s_y / h_sx))
-        #print(f"a_var {a_var}\n", f"b_var {b_var}\n", f"c_var {c_var}\n",
-        #      f"r_s {r_s}\n", f"s_x {s_x}\n", f"s_y {s_y}\n", f"s_z {s_z}")
 
         """
         print("lat min/max:",np.amin(np.nan_to_num(lats, 99999)),
@@ -212,7 +207,8 @@ class GeosGeom:
         print("lons size/nancount:",lons.size,
               np.count_nonzero(np.isnan(lons)))
         """
-        return lats.astype("float64"),lons.astype("float64")
+        m_invalid = np.ma.getmask(lats) | np.ma.getmask(lons)
+        return np.where(m_invalid,np.nan,lats),np.where(m_invalid,np.nan,lons)
 
     def get_viewing_zenith_angles(self) -> np.array:
         """

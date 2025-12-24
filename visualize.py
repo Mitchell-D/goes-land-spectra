@@ -63,7 +63,8 @@ class QueryResults:
         return groups
 
 if __name__=="__main__":
-    proj_root = Path("/rhome/mdodson/goes-land-spectra")
+    #proj_root = Path("/rhome/mdodson/goes-land-spectra")
+    proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
     ## directory where domain arrays will be stored.
     geom_dir = proj_root.joinpath("data/domains")
     ## directory where pkls of listings will be stored.
@@ -75,11 +76,13 @@ if __name__=="__main__":
 
     ## result pkls are stratified by domain, listing, ToD and band
     include_only = {
-        "domain":["geom-goes-conus-1"], ## G19E
+        #"domain":["geom-goes-conus-1"], ## G19E
+        "domain":["geom-goes-conus-0"], ## G19E
         "listing":["clearland-l1b-c0"],
         #"tod":["64800"], ## in seconds, only 18z
         "tod":["54000","64800","75600"], ## in seconds, only 18z
-        "month":["11","12","01"],
+        #"month":["11","12","01"],
+        "month":["07",],
         }
 
     plot_types = ["scalar", "rgb"]
