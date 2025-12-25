@@ -63,8 +63,8 @@ class QueryResults:
         return groups
 
 if __name__=="__main__":
-    proj_root = Path("/rhome/mdodson/goes-land-spectra")
-    #proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
+    #proj_root = Path("/rhome/mdodson/goes-land-spectra")
+    proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
     ## directory where domain arrays will be stored.
     geom_dir = proj_root.joinpath("data/domains")
     ## directory where pkls of listings will be stored.
@@ -75,7 +75,7 @@ if __name__=="__main__":
             "domain", "month", "tod", "band"]
 
     lat_bounds = (30,40)
-    lon_bounds = (-75,-95)
+    lon_bounds = (-90,-75)
 
     ## result pkls are stratified by domain, listing, ToD and band
     include_only = {
@@ -108,19 +108,11 @@ if __name__=="__main__":
     for ptype in plot_types:
         tmp_incl = {**include_only, **plot_reqs[ptype].get("force_subset",{})}
         qr = qr.subset(**tmp_incl)
-        mrg_keys,mrg_paths = zip(*qr.group(merge_over, invert=True).items())
-
+        #mrg_keys,mrg_paths = zip(*qr.group(merge_over, invert=True).items())
         #pprint(dict(zip(mrg_keys,mrg_paths)))
-        print(mrg_keys)
-        print(len(mrg_paths))
 
-        for mrg_keys,mrg_paths in zip(mrg_keys,mrg_paths):
-            pprint(mrg_keys)
-            pprint(mrg_paths)
-            for p in mrg_paths:
-                print(p.as_posix())
-            exit(0)
-            load_welford_grids(
+        for mrg_keys,mrg_paths in qr.group(merge_over, invert=True).items():
+            merged = load_welford_grids(
                     pkl_paths=mrg_paths,
                     geom_dir=geom_dir,
                     lat_bounds=lat_bounds,
@@ -129,27 +121,10 @@ if __name__=="__main__":
                     reduce_func=np.nanmean,
                     metrics=None, ## TODO: implement metric subset after merge
                     merge=True,
-                    res_factor=2,
+                    res_factor=3,
                     )
-            exit(0)
-
-        ## narrow down result pkls to the requested combination
-        '''
-        res_paths,res_tups = zip(*[
-            (p,pt) for p,pt in map(
-                lambda r:(r,r.stem.split("_")), out_dir.iterdir())
-            if any(pt[0]==s for s in tmp_incl.get("satellite",[pt[0]]))
-            and any(pt[1]==s for s in tmp_incl.get("listing", [pt[1]]))
-            and any(pt[2]==s for s in tmp_incl.get("stime", [pt[2]]))
-            and any(pt[3]==s for s in tmp_incl.get("ftime", [pt[3]]))
-            and any(pt[4]==s for s in tmp_incl.get("domain", [pt[4]]))
-            and any(pt[5]==s for s in tmp_incl.get("month", [pt[5]]))
-            and any(pt[6]==s for s in tmp_incl.get("tod", [pt[6]]))
-            and any(pt[7]==s for s in tmp_incl.get("band", [pt[7]]))
-            ])
-        pprint(res_paths)
-        '''
-
+            for k,v in merged.items():
+                print(k, v.shape)
 
     ## sanity check valid counts in results dir
     '''

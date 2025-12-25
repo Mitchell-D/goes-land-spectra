@@ -63,34 +63,35 @@ def load_welford_grids(pkl_paths:list, geom_dir:Path,
     #domy = slc_lat.stop - slc_lat.start
     #domx = slc_lon.stop - slc_lon.start #m_domain.shape
     domy,domx = m_domain.shape
-    m_sub = m_domain[slc_lat,slc_lon]
 
+    '''
+    m_sub = m_domain[slc_lat,slc_lon]
     out_shape = (
         m_sub.shape[0]*res_factor,
         m_sub.shape[1]*res_factor,
         [len(pkl_paths),1][merge]
         )
-    dom_yixs,dom_xixs = np.where(m_domain)
+    '''
 
 
     ## TODO: want to only regrid and operate on the subset defined by the
     ## slices. To do so, need to mask pixels
 
-    '''
-    new = {
-        "count":prv["count"] + cur["count"],
-        "min":np.full(out_shape, np.nan, dtype=np.float32),
-        "max":np.full(out_shape, np.nan, dtype=np.float32),
-        "m1":np.full(out_shape, np.nan, dtype=np.float32),
-        "m2":np.full(out_shape, np.nan, dtype=np.float32),
-        "m3":np.full(out_shape, np.nan, dtype=np.float32),
-        "m4":np.full(out_shape, np.nan, dtype=np.float32),
-        }
-    '''
     new = None
 
+    '''
+    1. use the domain mask and slice bounds to mask the 1d welford array
+       pixels that are within the domain and bounds. Collect only one set of
+       1d masks for each resolution
+    2. extract the unmasked pixels at their native resolution to a grid with
+       shape defined by the slice bounds times cur_fac_dom
+    3. expand or contract the 2d array to fit the target resolution
+
+    1.
+    '''
+
     m_dom = {} ## domain masks per supported original factor
-    res_merged = None
+    res_final = None
     tgt_fac_dom = res_factor ## target px factor wrt domain (2km)
     for j,p in enumerate(pkl_paths):
         ## determine how many times larger along both axes the data array is
@@ -108,17 +109,39 @@ def load_welford_grids(pkl_paths:list, geom_dir:Path,
         else:
             yfac = cury // domy
             xfac = curx // domx
-            print(cury, domy, curx, domx)
             assert cury % domy == 0
             assert curx % domx == 0
             assert yfac==xfac, "should always be true for GOES"
             cur_fac_dom = yfac
-            ## adapt the subgrid mask to the target size
-            #m_sub_tmp = np.repeat(m_sub, cur_fac_dom, axis=0)
-            #m_sub_tmp = np.repeat(m_sub_tmp, cur_fac_dom, axis=1)
 
-        if cur_fac_dom in dom_masks_per_fac.keys():
-            m_dom[cur_fac_dom] = None
+        ## get 2d domain mask for this band size
+        if cur_fac_dom != 1:
+            tmpm = np.repeat(m_domain, cur_fac_dom, axis=0)
+            tmpm = np.repeat(tmpm, cur_fac_dom, axis=1)
+        else:
+            tmpm = m_domain
+
+        ## make a slice for the geographic bounds on the current band size
+        tmp_slc = (slice(slc_lat.start*cur_fac_dom, slc_lat.stop*cur_fac_dom),
+            slice(slc_lon.start*cur_fac_dom, slc_lon.stop*cur_fac_dom))
+
+        ## make a 2d mask of the current size within the goegraphic bounds
+        m_bounds = np.full(tmpm.shape, False)
+        m_bounds[*tmp_slc] = True
+        ## get in-bounds indices wrt the 1d stored array
+        m_bounds_1d = m_bounds[tmpm]
+        yixs,xixs = np.where(m_bounds & tmpm)
+        ## convert full-array indeces to the size of the 2d subgrid
+        yixs -= tmp_slc[0].start
+        xixs -= tmp_slc[1].start
+        ## determine the shape of the new 2d subgrid
+        cur_shape_2d = (tmp_slc[0].stop-tmp_slc[0].start,
+            tmp_slc[1].stop-tmp_slc[1].start)
+        ## regrid included 1d data to the 2d subgrid
+        cur = {}
+        for k in all_metrics:
+            cur[k] = np.full(cur_shape_2d, np.nan, dtype=np.float32)
+            cur[k][yixs,xixs] = res[k][m_bounds_1d]
 
         ## determine the size factor of the current array wrt the target
         if cur_fac_dom == tgt_fac_dom:
@@ -127,32 +150,45 @@ def load_welford_grids(pkl_paths:list, geom_dir:Path,
             ## current resolution must strictly divide target resolution
             cur_fac_tgt = tgt_fac_dom // cur_fac_dom
             for k in all_metrics:
-                res[k] = np.where(m_sub_tmp, res[k], np.nan)
-                res[k] = np.repeat(res[k], cur_fac_tgt, axis=0)
-                res[k] = np.repeat(res[k], cur_fac_tgt, axis=1)
+                cur[k] = np.repeat(cur[k], cur_fac_tgt, axis=0)
+                cur[k] = np.repeat(cur[k], cur_fac_tgt, axis=1)
             assert tgt_fac_dom % cur_fac_tgt == 0
         else: ## contract if the current is larger than the target domain
             ## target resolution must strictly divide current resolution
             cur_fac_tgt = cur_fac_dom // tgt_fac_dom
+            out_shape = (cur_shape_2d[0] // cur_fac_tgt,
+                cur_shape_2d[1] // cur_fac_tgt)
             assert cur_fac_tgt % tgt_fac_dom == 0
             for k in all_metrics:
-                res[k] = np.where(m_sub_tmp, res[k], np.nan)
-                res[k] = reduce_func(as_strided(
-                    res[k],
+                cur[k] = reduce_func(as_strided(
+                    cur[k],
                     shape=(out_shape[0],out_shape[1],cur_fac_tgt,cur_fac_tgt),
-                    strides=(res[k].strides[0]*yfac, res[k].strides[1]*yfac,
-                        res[k].strides[0], res[k].strides[1]),
+                    strides=(
+                        cur[k].strides[0]*cur_fac_tgt,
+                        cur[k].strides[1]*cur_fac_tgt,
+                        cur[k].strides[0],
+                        cur[k].strides[1]),
                         ), axis=(2, 3))
-        for k in all_metrics:
-            print(res[k].shape)
         if merge:
-            if res_merged is None:
-                res_merged = res
+            if res_final is None:
+                res_final = cur
             else:
-                res_merged = merge_welford(res_merged, res)
+                res_final = merge_welford(res_final, cur)
         else:
+            if res_final is None:
+                out_shape = (*cur["count"].shape, len(pkl_paths))
+                new = {
+                    "count":np.full(out_shape, np.nan, dtype=np.float32),
+                    "min":np.full(out_shape, np.nan, dtype=np.float32),
+                    "max":np.full(out_shape, np.nan, dtype=np.float32),
+                    "m1":np.full(out_shape, np.nan, dtype=np.float32),
+                    "m2":np.full(out_shape, np.nan, dtype=np.float32),
+                    "m3":np.full(out_shape, np.nan, dtype=np.float32),
+                    "m4":np.full(out_shape, np.nan, dtype=np.float32),
+                    }
             for k in all_metrics:
                 new[k][...,j] = res[k]
+    return res_final
 
 def get_latlon_slice_bounds(lats, lons, lat_bounds=None, lon_bounds=None,
         subgrid_rule="complete", oob_value=np.nan):
@@ -230,6 +266,15 @@ def merge_welford(w1, w2):
         + d4 * w1["count"] * w2["count"] * c1 / (cnew**3) \
         + 6 * d2 * c2 / cnew**2 \
         + 4 * d1 * (w1["count"] * w2["m3"] - w2["count"] * w1["m3"]) / cnew
+
+    if "max" in w1.keys() and "max" in w2.keys():
+        new["max"] = np.where(
+                w1["max"] > w2["max"],
+                w1["max"], w2["max"])
+    if "min" in w1.keys() and "min" in w2.keys():
+        new["min"] = np.where(
+                w1["min"] < w2["min"],
+                w1["min"], w2["min"])
     return new
 
 def get_closest_latlon(self, lat, lon):

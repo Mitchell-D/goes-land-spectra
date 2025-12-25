@@ -710,31 +710,10 @@ if __name__=="__main__":
                         for k in cur.keys():
                             cur[k] = cur[k][mv_both]
                             prv[k] = prv[k][mv_both]
-
                         tmp = merge_welford(cur,prv)
                         for k in ["count", "m1", "m2", "m3", "m4"]:
                             new[k][mv_both] = tmp[k]
 
-                        new["min"][mv_both] = np.where(
-                                cur["min"] < prv["min"],
-                                cur["min"], prv["min"])
-                        new["max"][mv_both] = np.where(
-                                cur["max"] < prv["max"],
-                                cur["max"], prv["max"])
-                        '''
-                        d1 = cur["mean"] - prv["mean"]
-                        d2 = d1 * d1
-                        new["mean"][mv_both] = (cur["count"]*cur["mean"] \
-                                + prv["count"]*prv["mean"]) \
-                                / new["count"][mv_both]
-                        new["m2"][mv_both] = cur["m2"]+prv["m2"]\
-                                + d2*(cur["count"]*prv["count"]) \
-                                / new["count"][mv_both]
-                        new["max"][mv_both] = np.where(
-                                cur["max"]>prv["max"], cur["max"], prv["max"])
-                        new["min"][mv_both] = np.where(
-                                cur["min"]<prv["min"], cur["min"], prv["min"])
-                        '''
                 if debug:
                     dc0 = time.perf_counter()
                     dt = dc0 - t0

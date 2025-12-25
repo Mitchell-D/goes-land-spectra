@@ -26,10 +26,10 @@ histograms for each pixel in a subset of bands.
 
 **research topics**
 
--
-- investigate the homogeneity of LST anomaly. Use it to build a regression
-  model for clear-sky temperature fluctuation. (preferably without severely
-  discretizing sfc classes).
+- closure study on CERES footprints
+- investigate the homogeneity of LST anomaly. Use it to build a
+  regression model for clear-sky temperature fluctuation. (preferably
+  without severely discretizing sfc classes).
   - calibrate to SCAN ground stations?
 - classify out-of-distribution events over different regions
 - sub-pixel cloud characterization from multi-satellite observations
@@ -116,3 +116,8 @@ should be appropriate to process 1 day at a time...
 2. check the coordinate grid against existing stored grids. If none
    of them are univerally close, make and store a new one.
 3.
+
+## TODO
+
+- update results pkls to include original array resolution
+- first run maxes are incorrect. re-run and re-evaluate
