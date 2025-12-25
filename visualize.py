@@ -112,19 +112,28 @@ if __name__=="__main__":
         #pprint(dict(zip(mrg_keys,mrg_paths)))
 
         for mrg_keys,mrg_paths in qr.group(merge_over, invert=True).items():
-            merged = load_welford_grids(
+            merged,latlon = load_welford_grids(
                     pkl_paths=mrg_paths,
                     geom_dir=geom_dir,
-                    lat_bounds=lat_bounds,
-                    lon_bounds=lon_bounds,
+                    #lat_bounds=lat_bounds,
+                    #lon_bounds=lon_bounds,
                     subgrid_rule="complete",
                     reduce_func=np.nanmean,
                     metrics=None, ## TODO: implement metric subset after merge
                     merge=True,
-                    res_factor=3,
+                    res_factor=1,
                     )
             for k,v in merged.items():
-                print(k, v.shape)
+                print(k, v.shape, latlon.shape)
+                plot_geo_scalar(
+                    data=merged[k],
+                    latitude=latlon[...,0],
+                    longitude=latlon[...,1],
+                    plot_spec={
+                        "cbar_orient":"horizontal",
+                        },
+                    show=True,
+                    )
 
     ## sanity check valid counts in results dir
     '''

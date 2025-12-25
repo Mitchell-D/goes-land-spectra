@@ -300,7 +300,8 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
         print(f"worker px/sec: {px_counter/dt}")
     return rad_results,metadata ## assumes metadata consistent
 
-def get_abi_l1b_radiance(nc_file:Path, get_mask:bool=False, _ds=None):
+def get_abi_l1b_radiance(nc_file:Path, get_mask:bool=False,
+        convert_tb_ref=True, _ds=None):
     """
     Extract the radiances from a L1b netCDf, optionally including a boolean
     mask for off-disc values.
@@ -323,6 +324,17 @@ def get_abi_l1b_radiance(nc_file:Path, get_mask:bool=False, _ds=None):
     mkeys = [k for k in req_meta if k in ds.variables.keys()]
     metadata = {k:tmpd for k in mkeys if not (tmpd:=ds[k][:].data)==0}
     ds.close()
+    if convert_tb_ref:
+        if "kappa0" in metadata.keys():
+            rad *= metadata["kappa0"]
+        elif "planck_fk1" in metadata.keys():
+            planck = (
+                metadata["planck_fk1"][:].data,
+                metadata["planck_fk2"][:].data,
+                metadata["planck_bc1"][:].data,
+                metadata["planck_bc2"][:].data,
+                )
+            rad = rad_to_Tb(rad, *planck)
     return rad,m_valid,metadata
 
 def rad_to_Tb(rads:np.array, fk1:np.array, fk2:np.array,
@@ -677,42 +689,8 @@ if __name__=="__main__":
                         print(f"head load: {loadtimes[-1]}")
                     cur = tmp_res[rkey]
                     assert prv["count"].shape==cur["count"].shape
-                    mv_prv = prv["count"] > 0
-                    mv_cur = cur["count"] > 0
-                    mv_both = mv_prv & mv_cur
-                    mv_only_cur = mv_cur & ~mv_prv
-                    mv_only_prv = mv_prv & ~mv_cur
 
-                    new = {
-                        "count":prv["count"] + cur["count"],
-                        "min":np.full(mv_prv.shape, np.nan, dtype=np.float32),
-                        "max":np.full(mv_prv.shape, np.nan, dtype=np.float32),
-                        "m1":np.full(mv_prv.shape, np.nan, dtype=np.float32),
-                        "m2":np.full(mv_prv.shape, np.nan, dtype=np.float32),
-                        "m3":np.full(mv_prv.shape, np.nan, dtype=np.float32),
-                        "m4":np.full(mv_prv.shape, np.nan, dtype=np.float32),
-                        }
-                    if np.any(mv_only_cur):
-                        new["min"][mv_only_cur] = cur["min"][mv_only_cur]
-                        new["max"][mv_only_cur] = cur["max"][mv_only_cur]
-                        new["m1"][mv_only_cur] = cur["m1"][mv_only_cur]
-                        new["m2"][mv_only_cur] = cur["m2"][mv_only_cur]
-                        new["m3"][mv_only_cur] = cur["m3"][mv_only_cur]
-                        new["m4"][mv_only_cur] = cur["m4"][mv_only_cur]
-                    if np.any(mv_only_prv):
-                        new["min"][mv_only_prv] = prv["min"][mv_only_prv]
-                        new["max"][mv_only_prv] = prv["max"][mv_only_prv]
-                        new["m1"][mv_only_prv] = prv["m1"][mv_only_prv]
-                        new["m2"][mv_only_prv] = prv["m2"][mv_only_prv]
-                        new["m3"][mv_only_prv] = prv["m3"][mv_only_prv]
-                        new["m4"][mv_only_prv] = prv["m4"][mv_only_prv]
-                    if np.any(mv_both):
-                        for k in cur.keys():
-                            cur[k] = cur[k][mv_both]
-                            prv[k] = prv[k][mv_both]
-                        tmp = merge_welford(cur,prv)
-                        for k in ["count", "m1", "m2", "m3", "m4"]:
-                            new[k][mv_both] = tmp[k]
+                    new = merge_welford(prv, cur)
 
                 if debug:
                     dc0 = time.perf_counter()

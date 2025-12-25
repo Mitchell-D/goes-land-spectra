@@ -121,3 +121,7 @@ should be appropriate to process 1 day at a time...
 
 - update results pkls to include original array resolution
 - first run maxes are incorrect. re-run and re-evaluate
+- update domains with multiple resolutions
+  - better yet, dump to a spatially-chunked HDF5 associated with
+    each run across bands, months, and times
+

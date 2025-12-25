@@ -60,37 +60,7 @@ def load_welford_grids(pkl_paths:list, geom_dir:Path,
         )
 
     ## calculate the shape of the domain subgrid
-    #domy = slc_lat.stop - slc_lat.start
-    #domx = slc_lon.stop - slc_lon.start #m_domain.shape
     domy,domx = m_domain.shape
-
-    '''
-    m_sub = m_domain[slc_lat,slc_lon]
-    out_shape = (
-        m_sub.shape[0]*res_factor,
-        m_sub.shape[1]*res_factor,
-        [len(pkl_paths),1][merge]
-        )
-    '''
-
-
-    ## TODO: want to only regrid and operate on the subset defined by the
-    ## slices. To do so, need to mask pixels
-
-    new = None
-
-    '''
-    1. use the domain mask and slice bounds to mask the 1d welford array
-       pixels that are within the domain and bounds. Collect only one set of
-       1d masks for each resolution
-    2. extract the unmasked pixels at their native resolution to a grid with
-       shape defined by the slice bounds times cur_fac_dom
-    3. expand or contract the 2d array to fit the target resolution
-
-    1.
-    '''
-
-    m_dom = {} ## domain masks per supported original factor
     res_final = None
     tgt_fac_dom = res_factor ## target px factor wrt domain (2km)
     for j,p in enumerate(pkl_paths):
@@ -188,7 +158,12 @@ def load_welford_grids(pkl_paths:list, geom_dir:Path,
                     }
             for k in all_metrics:
                 new[k][...,j] = res[k]
-    return res_final
+
+    if tgt_fac_dom != 1:
+        raise ValueError("the latlons aren't gonna work bro. "
+            "you gotta implement larger domain storage >:O")
+    latlon = (gg.lats[slc_lat,slc_lon],gg.lons[slc_lat,slc_lon])
+    return res_final, np.stack(latlon, axis=-1)
 
 def get_latlon_slice_bounds(lats, lons, lat_bounds=None, lon_bounds=None,
         subgrid_rule="complete", oob_value=np.nan):
@@ -244,37 +219,78 @@ def merge_welford(w1, w2):
     "count", "m1", "m2", "m3", "m4", merges them using the Terribery
     adaptation of the welford algorithm for higher order moments
     """
-    d1 = w1["m1"] - w2["m1"]
-    d2 = d1 * d1
-    d3 = d1 * d2
-    d4 = d2 * d2
-    cnew = w1["count"] + w2["count"]
+    mv_w1 = w1["count"] > 0
+    mv_w2 = w2["count"] > 0
+    mv_both = mv_w1 & mv_w2
+    mv_only_w1 = mv_w1 & ~mv_w2
+    mv_only_w2 = mv_w2 & ~mv_w1
 
-    new = {}
-    new["count"] = cnew
-    new["m1"] = (w1["count"] * w1["m1"] + w2["count"] * w2["m1"]) / cnew
+    new = {
+        "count":np.full(w1["count"].shape, np.nan, dtype=np.float32),
+        "min":np.full(w1["count"].shape, np.nan, dtype=np.float32),
+        "min":np.full(w1["count"].shape, np.nan, dtype=np.float32),
+        "max":np.full(w1["count"].shape, np.nan, dtype=np.float32),
+        "m1":np.full(w1["count"].shape, np.nan, dtype=np.float32),
+        "m2":np.full(w1["count"].shape, np.nan, dtype=np.float32),
+        "m3":np.full(w1["count"].shape, np.nan, dtype=np.float32),
+        "m4":np.full(w1["count"].shape, np.nan, dtype=np.float32),
+        }
 
-    new["m2"] = w1["m2"] + w2["m2"] + d2 * w1["count"] * w2["count"] / cnew
+    if np.any(mv_only_w1):
+        new["count"][mv_only_w1] = w1["count"][mv_only_w1]
+        new["min"][mv_only_w1] = w1["min"][mv_only_w1]
+        new["max"][mv_only_w1] = w1["max"][mv_only_w1]
+        new["m1"][mv_only_w1] = w1["m1"][mv_only_w1]
+        new["m2"][mv_only_w1] = w1["m2"][mv_only_w1]
+        new["m3"][mv_only_w1] = w1["m3"][mv_only_w1]
+        new["m4"][mv_only_w1] = w1["m4"][mv_only_w1]
+    if np.any(mv_only_w2):
+        new["count"][mv_only_w2] = w2["count"][mv_only_w2]
+        new["min"][mv_only_w2] = w2["min"][mv_only_w2]
+        new["max"][mv_only_w2] = w2["max"][mv_only_w2]
+        new["m2"][mv_only_w2] = w2["m1"][mv_only_w2]
+        new["m2"][mv_only_w2] = w2["m2"][mv_only_w2]
+        new["m3"][mv_only_w2] = w2["m3"][mv_only_w2]
+        new["m4"][mv_only_w2] = w2["m4"][mv_only_w2]
 
-    new["m3"] = w1["m3"] + w2["m3"] \
-        + d3*w1["count"]*w2["count"] * (w1["count"]-w2["count"]) / cnew**2 \
-        + 3*d1 * (w1["count"] * w2["m2"] - w2["count"] * w1["m2"]) / cnew
+    if np.any(mv_both):
+        b1,b2 = {},{} ## masked dict subsets for values in both
+        for k in list(set(w1.keys()).union(set(w2.keys()))):
+            b1[k] = w1[k][mv_both]
+            b2[k] = w2[k][mv_both]
+        d1 = b1["m1"] - b2["m1"]
+        d2 = d1 * d1
+        d3 = d1 * d2
+        d4 = d2 * d2
+        cn = b1["count"] + b2["count"]
 
-    c1 = w1["count"]**2 - w1["count"] * w2["count"] + w2["count"]**2
-    c2 = w1["m2"] * w2["count"]**2 + w2["m2"] * w1["count"]**2
-    new["m4"] = w1["m4"] + w2["m4"] \
-        + d4 * w1["count"] * w2["count"] * c1 / (cnew**3) \
-        + 6 * d2 * c2 / cnew**2 \
-        + 4 * d1 * (w1["count"] * w2["m3"] - w2["count"] * w1["m3"]) / cnew
+        bth = {}
+        bth["count"] = cn
+        bth["m1"] = (b1["count"] * b1["m1"] + b2["count"] * b2["m1"]) / cn
 
-    if "max" in w1.keys() and "max" in w2.keys():
-        new["max"] = np.where(
-                w1["max"] > w2["max"],
-                w1["max"], w2["max"])
-    if "min" in w1.keys() and "min" in w2.keys():
-        new["min"] = np.where(
-                w1["min"] < w2["min"],
-                w1["min"], w2["min"])
+        bth["m2"] = b1["m2"] + b2["m2"] + d2 * b1["count"] * b2["count"] / cn
+
+        bth["m3"] = b1["m3"] + b2["m3"] \
+            + d3*b1["count"]*b2["count"]*(b1["count"]-b2["count"]) / cn**2 \
+            + 3*d1 * (b1["count"] * b2["m2"] - b2["count"] * b1["m2"]) / cn
+
+        c1 = b1["count"]**2 - b1["count"] * b2["count"] + b2["count"]**2
+        c2 = b1["m2"] * b2["count"]**2 + b2["m2"] * b1["count"]**2
+        bth["m4"] = b1["m4"] + b2["m4"] \
+            + d4 * b1["count"] * b2["count"] * c1 / (cn**3) \
+            + 6 * d2 * c2 / cn**2 \
+            + 4 * d1 * (b1["count"] * b2["m3"] - b2["count"] * b1["m3"]) / cn
+
+        if "max" in b1.keys() and "max" in b2.keys():
+            bth["max"] = np.where(
+                    b1["max"] > b2["max"],
+                    b1["max"], b2["max"])
+        if "min" in b1.keys() and "min" in b2.keys():
+            bth["min"] = np.where(
+                    b1["min"] < b2["min"],
+                    b1["min"], b2["min"])
+        for k in b1.keys():
+            new[k][mv_both] = bth[k]
     return new
 
 def get_closest_latlon(self, lat, lon):
