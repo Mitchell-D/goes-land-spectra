@@ -5,7 +5,7 @@ import time
 import gc
 from botocore import UNSIGNED
 from botocore.client import Config
-from multiprocessing import Pool,Lock
+from multiprocessing import Pool,Lock,current_process
 from pprint import pprint
 from pathlib import Path
 from datetime import datetime,timedelta
@@ -17,10 +17,10 @@ from GOESProduct import GOESProduct as GP
 from GOESProduct import valid_goes_products
 from helpers import merge_welford
 
-def init_mp_get_goes_l1b_and_masks():
+def init_mp_get_goes_l1b_and_masks(lck):
     ## semaphor for the geom pkl index, which is captured on read and write
     global geom_index_lock
-    geom_index_lock = Lock()
+    geom_index_lock = lck
     ## need s3 session as well for downloading files
     init_s3_session()
 
@@ -28,25 +28,53 @@ def init_s3_session():
     global s3
     s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
 
-def load_geos_geom_parallel(geom_pkl_path):
-    """ """
+def load_geos_geom(geom_pkl_path, shape=None):
+    """
+    Loads geometry data from a pkl path. If given a valid stored domain shape,
+    returns the associated data as a 2-tuple (GeosGeom, m_domain). If no
+    shape is provided, all stored domains are returned as a dict mapping domain
+    shapes to 2-tuples as above.
+    """
     assert geom_pkl_path.exists()
-    with geom_index_lock:
-        ggargs,m_domain = pkl.load(geom_pkl_path.open("rb"))
-        gg = GeosGeom(**ggargs)
-    return gg,m_domain
+    #with geom_index_lock:
+    ggdict = pkl.load(geom_pkl_path.open("rb"))
+    if not shape is None:
+        return (GeosGeom(**ggdict[shape][0]), ggdict[shape][1])
+    ## return the smallest resolution by default
+    shape = next(sorted(ggdict.keys(), key=lambda t:t[0]*t[1]))
+    return {s:(GeosGeom(**ggdict[s][0]),ggdict[s][1]) for s in ggdict.keys()}
 
-def dump_geos_geom_parallel(geom_dir, cur_geom, nc_path, domain_mask=None):
+def dump_geos_geom(geom_dir, cur_geom, nc_path,
+        cur_shape=None, domain_mask=None, debug=False):
     """
     Multiprocess friendly function that maintains a directory of GeosGeom pkl
     files. The directory has an index file mapping basic projection values
     to a pkl of radian arrays and geometry data associated with that satellite
     position.
 
+    1. check if the index file exists. If it does, then load it. Otherwise,
+       create a new one.
+
+    2. load the index file. Check if the match_fields of user-provided
+       cur_geom dict are all equal to one of the index entries.
+       If so, get the geom pkl's path, and check whether the current array
+       resolution is supported.
+
+       2a. If the pkl exists, is indexed, and supports the current resolution,
+           just return its path.
+       2b. If the pkl is not indexed or doesn't exist, create a new entry and
+           pkl given the current parameters, resolution, and scan angles.
+       2c. If the pkl is indexed and exists but doesn't support the current
+           resolution, load it and update its dictionary with the scan angles
+           from nc_path.
+
     :@param geom_dir: Directory where geometry pkls and index will be placed.
     :@param cur_geom: projection dictionary for the current netCDF
     :@param nc_path: path to the netCDF associated with cur_geom in case scan
         angle arrays need to be extracted for a new geom.
+    :@param cur_shape: If provided, verifies that cur_shape matches the shapes
+        of viewing angle arrays already stored in the geom, and stores it
+        otherwise.
     :@param domain_mask: Optional mask setting True to valid points in the
         domain, which enables throwing away pixels that are always OOB.
     """
@@ -59,42 +87,88 @@ def dump_geos_geom_parallel(geom_dir, cur_geom, nc_path, domain_mask=None):
     assert geom_dir.exists()
     index_path = geom_dir.joinpath("index.pkl")
 
-    geom_index_lock.acquire() ## acquire the semaphor
+    #geom_index_lock.acquire() ## acquire the semaphor
     ## load the index file of geometries
     if index_path.exists():
-        geoms = pkl.load(index_path.open("rb"))
+        with index_path.open("rb") as index_file:
+            geoms = pkl.load(index_file)
+            #print(f"geom OPEN {index_path.name} {current_process()}",
+            #        flush=True)
     else:
         geoms = {}
+    #for k,v in geoms.items():
+    #    print(f"geom CUR {k} {v['shapes']} {current_process()}", flush=True)
     ## construct the key associated with this projection
     cur = tuple(float(cur_geom[k]) for k in match_fields)
     geom_pkl_path = None
+    store_new_shape = False
     ## see if there is a pkl indexed that matches this projection
     for k,v in list(geoms.items())[::-1]:
-        if np.all(np.isclose(cur,k)):
-            geom_pkl_path = Path(v)
+        #if np.all(np.isclose(cur,k)):
+        if tuple(cur)==tuple(k):
+            cur = k ## so keys match later
+            geom_pkl_path = Path(v["path"])
+            if not cur_shape is None and cur_shape not in v["shapes"]:
+                store_new_shape = True
 
-    ## if there is a pkl for this geom configuration, return its path
-    if not geom_pkl_path is None:
-        if geom_pkl_path.exists():
-            geom_index_lock.release()
+    ## if there is a pkl for this geom configuration, return the path if the
+    ## current shape is indexed. If not, update the pkl and return the path.
+    if (not geom_pkl_path is None) and geom_pkl_path.exists():
+        if not store_new_shape:
             return geom_pkl_path
-    ## make a new listing entry for the pkl otherwise
-    else:
-        geom_pkl_path = geom_dir.joinpath(
-            f"geom-goes-conus-{len(geoms.keys())}.pkl")
-        geoms = {cur:geom_pkl_path.as_posix(), **geoms}
-        pkl.dump(geoms, index_path.open("wb"))
+        ## configured and existing but needs shape
+        with geom_pkl_path.open("rb") as geom_file:
+            ggdict = pkl.load(geom_file)
+        ds = Dataset(nc_path, "r")
+        sa_ns,sa_ew = np.meshgrid(
+                ds["y"][...],
+                ds["x"][...],
+                indexing="ij",
+                )
+        ds.close()
+        assert cur_shape == sa_ns.shape, \
+                f"reported shape {cur_shape} != {sa_ns.shape}"
+        ggdict[sa_ns.shape] = ({
+            "n_s_scan_angles":sa_ns.data,
+            "e_w_scan_angles":sa_ew.data,
+            "sweep_angle_axis":"x",
+            **{f:cur_geom[f] for f in match_fields},
+            }, domain_mask)
+        with geom_pkl_path.open("wb") as geom_file:
+            pkl.dump(ggdict, geom_file)
+        ## update the index listing with the new shape
+        assert store_new_shape
+        geoms[cur]
+        geoms[cur]["shapes"].append(cur_shape)
+        with index_path.open("wb") as index_file:
+            pkl.dump(geoms, index_file)
+        #print(f"geom UPDATE {cur} {cur_shape} " \
+        #    + f"{np.count_nonzero(domain_mask)} {current_process()}",
+        #    flush=True)
+        return geom_pkl_path
 
+    ## if here, geom may exist or be configured, but not both.
+    ## in both cases, just make a new one.
+    geom_pkl_path = geom_dir.joinpath(
+        f"geom-goes-conus-{len(geoms.keys())}.pkl")
     ds = Dataset(nc_path, "r")
     sa_ns,sa_ew = np.meshgrid(ds["y"][...], ds["x"][...], indexing="ij")
     ds.close()
-    pkl.dump(({
-        "n_s_scan_angles":sa_ns,
-        "e_w_scan_angles":sa_ew,
-        "sweep_angle_axis":"x",
-        **{f:cur_geom[f] for f in match_fields},
-        }, domain_mask), geom_pkl_path.open("wb"))
-    geom_index_lock.release()
+    ggdict = {
+        sa_ns.shape:({
+            "n_s_scan_angles":sa_ns.data,
+            "e_w_scan_angles":sa_ew.data,
+            "sweep_angle_axis":"x",
+            **{f:cur_geom[f] for f in match_fields},
+            }, domain_mask)
+        }
+    with geom_pkl_path.open("wb") as geom_file:
+        pkl.dump(ggdict, geom_file)
+    geoms.update({cur:{"path":geom_pkl_path, "shapes":[cur_shape]}})
+    #print(f"geom NEW {cur} {cur_shape} " \
+    #    + f"{np.count_nonzero(domain_mask)} {current_process()}", flush=True)
+    with index_path.open("wb") as index_file:
+        pkl.dump(geoms, index_file)
     return geom_pkl_path
 
 def parse_goes_stime(fname:str):
@@ -159,13 +233,22 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
 
         ## atomically ensure the existence of and load the current satellite
         ## geometry and previous domain mask
-        geom_path = dump_geos_geom_parallel(
-                geom_dir=geom_dir,
-                cur_geom=proj,
-                nc_path=lmask_path,
-                domain_mask=masks[mlabels.index("m_land")],
-                )
-        gg,m_domain = load_geos_geom_parallel(geom_path)
+        #geom_index_lock.acquire()
+        with geom_index_lock:
+            print(f"Acquired {geom_index_lock}", flush=True)
+            geom_path = dump_geos_geom(
+                    geom_dir=geom_dir,
+                    cur_geom=proj,
+                    cur_shape=m_valid.shape,
+                    nc_path=lmask_path,
+                    domain_mask=masks[mlabels.index("m_land")],
+                    )
+            gg,m_domain = load_geos_geom(
+                    geom_path,
+                    shape=masks[mlabels.index("m_land")].shape
+                    )
+            print(f"Released {geom_index_lock}", flush=True)
+        #geom_index_lock.release()
         domain_size = np.count_nonzero(m_domain)
 
         gkey = geom_path.stem
@@ -176,8 +259,8 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
             rad_results[gkey] = {sstr:{}}
 
         #m_domain_valid = m_domain[m_valid]
-        bands,radiances,valid_masks,meta = zip(*[
-            (b,*get_abi_l1b_radiance(p, get_mask=True))
+        bands,rad_paths,radiances,valid_masks,meta = zip(*[
+            (b,p,*get_abi_l1b_radiance(p, get_mask=True))
             for b,p in rad_paths
             ])
 
@@ -190,7 +273,8 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
         m_rad = None
         domy,domx = m_domain.shape
         res_facs = []
-        for j,(band,m_cur) in enumerate(zip(bands,valid_masks)):
+        for j,(band,bpath,m_cur) in enumerate(zip(
+                bands,rad_paths,valid_masks)):
             cury,curx = m_cur.shape
             if domy==cury and domx==curx:
                 m_tmp = m_cur
@@ -210,6 +294,21 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
                         m_cur.strides[0], m_cur.strides[1]
                         ),
                     ), axis=(2,3))
+
+                ## add the new scan angles if this is a new shape
+                #geom_index_lock.acquire()
+                with geom_index_lock:
+                    print(f"Acquired {geom_index_lock}")
+                    dump_geos_geom(
+                        geom_dir=geom_dir,
+                        cur_geom=proj,
+                        cur_shape=m_cur.shape,
+                        nc_path=bpath,
+                        domain_mask=np.repeat(np.repeat(
+                            m_domain,yfac,axis=0),xfac,axis=1),
+                        )
+                    print(f"Released {geom_index_lock}")
+                #geom_index_lock.release()
             m_rad = m_tmp&m_valid if m_rad is None else m_rad&m_tmp
 
         rad_results = {
@@ -326,13 +425,13 @@ def get_abi_l1b_radiance(nc_file:Path, get_mask:bool=False,
     ds.close()
     if convert_tb_ref:
         if "kappa0" in metadata.keys():
-            rad *= metadata["kappa0"]
+            rad *= metadata["kappa0"].data
         elif "planck_fk1" in metadata.keys():
             planck = (
-                metadata["planck_fk1"][:].data,
-                metadata["planck_fk2"][:].data,
-                metadata["planck_bc1"][:].data,
-                metadata["planck_bc2"][:].data,
+                metadata["planck_fk1"].data,
+                metadata["planck_fk2"].data,
+                metadata["planck_bc1"].data,
+                metadata["planck_bc2"].data,
                 )
             rad = rad_to_Tb(rad, *planck)
     return rad,m_valid,metadata
@@ -558,7 +657,8 @@ if __name__=="__main__":
     #nworkers,batch_size = 12,16 ## ~4min
 
     ## on meteor, head calc:~6.5s sometimes, worker ~5e6 px/sec NOT inc. DL
-    nworkers,batch_size = 8,24 ##
+    #nworkers,batch_size = 8,24 ##
+    nworkers,batch_size = 11,12 ##
 
     ## identifying name of this dataset for the listing pkl
     listing_name = f"goes{gver}_clearland-l1b-c0" ## lmask&l1b combo 0
@@ -566,7 +666,7 @@ if __name__=="__main__":
     new_listing = False
     debug = True
     redownload = False
-    delete_after_use = True ## look into storing compressed in-domain arrays
+    delete_after_use = False ## look into storing compressed in-domain arrays
     overwrite_results = False
 
     """ ---------------- ( end normal configuration ) ---------------- """
@@ -661,7 +761,9 @@ if __name__=="__main__":
 
     ## download and extract
     metadata = {} ## (geom,band)
-    with Pool(nworkers, initializer=init_mp_get_goes_l1b_and_masks) as pool:
+    with Pool(nworkers, initializer=init_mp_get_goes_l1b_and_masks,
+            initargs=(Lock(),)) as pool:
+        ## iterate over batches returned by each worker
         for arg,(tmp_res,meta) in pool.imap_unordered(
                 mp_get_goes_l1b_and_masks, args):
             if debug:
@@ -670,9 +772,14 @@ if __name__=="__main__":
             for mkey in meta.keys():
                 if mkey not in metadata.keys():
                     metadata[mkey] = meta[mkey]
+
+            ## for each of the results returned, merge the welford dict with
+            ## that of previously loaded results. Unique results are identified
+            ## by keys that specify the (geom, month, ToD, band) combo
             for rkey in tmp_res.keys():
                 out_path = out_dir.joinpath("_".join([lkey,*rkey])+".pkl")
                 cur = tmp_res[rkey]
+                print(rkey, f"{cur['count'].shape=}")
                 prv,new = None,None
                 ## if rkey isn't present, then either an overwrite is
                 ## requested, or no data has been loaded yet
@@ -686,9 +793,10 @@ if __name__=="__main__":
                     prv,_ = pkl.load(out_path.open("rb"))
                     if debug:
                         loadtimes.append(time.perf_counter()-tl1)
-                        print(f"head load: {loadtimes[-1]}")
-                    cur = tmp_res[rkey]
-                    assert prv["count"].shape==cur["count"].shape
+                        print(f"head load: {loadtimes[-1]} ({rkey})")
+                    ## shape of previous counts dict needs to match current.
+                    assert prv["count"].shape==cur["count"].shape, \
+                        (prv["count"].shape, cur["count"].shape)
 
                     new = merge_welford(prv, cur)
 

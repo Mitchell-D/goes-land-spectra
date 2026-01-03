@@ -219,11 +219,14 @@ def merge_welford(w1, w2):
     "count", "m1", "m2", "m3", "m4", merges them using the Terribery
     adaptation of the welford algorithm for higher order moments
     """
+    valid_to_merge = ["count", "min", "max", "m1", "m2", "m3", "m4"]
     mv_w1 = w1["count"] > 0
     mv_w2 = w2["count"] > 0
     mv_both = mv_w1 & mv_w2
     mv_only_w1 = mv_w1 & ~mv_w2
     mv_only_w2 = mv_w2 & ~mv_w1
+
+    print(f"merging",mv_w1.shape,mv_w2.shape)
 
     new = {
         "count":np.full(w1["count"].shape, np.nan, dtype=np.float32),
@@ -255,7 +258,15 @@ def merge_welford(w1, w2):
 
     if np.any(mv_both):
         b1,b2 = {},{} ## masked dict subsets for values in both
-        for k in list(set(w1.keys()).union(set(w2.keys()))):
+        to_merge = [
+                k for k in set(w1.keys()).union(set(w2.keys()))
+                if k in valid_to_merge
+                ]
+        no_merge = [
+                k for k in set(w1.keys()).union(set(w2.keys()))
+                if k not in valid_to_merge
+                ]
+        for k in to_merge:
             b1[k] = w1[k][mv_both]
             b2[k] = w2[k][mv_both]
         d1 = b1["m1"] - b2["m1"]
@@ -291,6 +302,9 @@ def merge_welford(w1, w2):
                     b1["min"], b2["min"])
         for k in b1.keys():
             new[k][mv_both] = bth[k]
+        for k in no_merge:
+            assert w1[k]==w2[k], f"Mismatching {k}:({w1[k]}, {w2[k]})"
+            new[k] = w1[k]
     return new
 
 def get_closest_latlon(self, lat, lon):
