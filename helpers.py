@@ -45,14 +45,18 @@ def load_welford_grids(pkl_paths:list, geom_dir:Path,
     tups = [p.stem.split("_") for p in pkl_paths]
     domains = list(zip(*tups))[4]
     assert all(d==domains[0] for d in domains[1:]),domains
-    ggargs,m_domain = pkl.load(geom_dir.joinpath(
-        f"{domains[0]}.pkl").open("rb"))
-    gg = GeosGeom(**ggargs)
+    #ggargs,m_domain = pkl.load(geom_dir.joinpath(
+    #    f"{domains[0]}.pkl").open("rb"))
+    ggdict = pkl.load(geom_dir.joinpath(f"{domains[0]}.pkl").open("rb"))
+    ## domain is always defined in terms of the spatially smallest mask
+    domain_key = sorted(ggdict.keys(), key=lambda t:t[0]*t[1])[0]
+    ggargs_domain,m_domain = ggdict[domain_key]
+    gg_domain = GeosGeom(**ggargs_domain)
 
     ## find slices that describe the requested subgrid
     slc_lat,slc_lon = get_latlon_slice_bounds(
-        lats=gg.lats,
-        lons=gg.lons,
+        lats=gg_domain.lats,
+        lons=gg_domain.lons,
         lat_bounds=lat_bounds,
         lon_bounds=lon_bounds,
         subgrid_rule=subgrid_rule,
@@ -67,9 +71,9 @@ def load_welford_grids(pkl_paths:list, geom_dir:Path,
         ## determine how many times larger along both axes the data array is
         ## than the domain array
         res,meta = pkl.load(p.open("rb"))
-        ## TODO: implement shape from results dict
-        #cury,curx = res["count"].shape
-        cury,curx = TEMP[p.stem.split("_")[-1]]
+        ## TODO: implement shape from results dict (done?)
+        cury,curx = res["shape"]
+        #cury,curx = TEMP[p.stem.split("_")[-1]]
 
         ## convert the domain valid mask to the current array size
         cur_fac_dom = None
@@ -147,7 +151,8 @@ def load_welford_grids(pkl_paths:list, geom_dir:Path,
         else:
             if res_final is None:
                 out_shape = (*cur["count"].shape, len(pkl_paths))
-                new = {
+                res_final = {
+                    "shape":out_shape,
                     "count":np.full(out_shape, np.nan, dtype=np.float32),
                     "min":np.full(out_shape, np.nan, dtype=np.float32),
                     "max":np.full(out_shape, np.nan, dtype=np.float32),
@@ -157,12 +162,16 @@ def load_welford_grids(pkl_paths:list, geom_dir:Path,
                     "m4":np.full(out_shape, np.nan, dtype=np.float32),
                     }
             for k in all_metrics:
-                new[k][...,j] = res[k]
+                res_final[k][...,j] = res[k]
 
-    if tgt_fac_dom != 1:
-        raise ValueError("the latlons aren't gonna work bro. "
-            "you gotta implement larger domain storage >:O")
-    latlon = (gg.lats[slc_lat,slc_lon],gg.lons[slc_lat,slc_lon])
+    tgt_full_res = (m_domain.shape[0]*tgt_fac_dom,
+            m_domain.shape[1]*tgt_fac_dom)
+    assert tgt_full_res in ggdict.keys(), (tgt_full_res, list(ggdict.keys()))
+    gg_cur = GeosGeom(**ggdict[tgt_full_res][0])
+    sub_slice = (slice(slc_lat.start*tgt_fac_dom,slc_lat.stop*tgt_fac_dom),
+            slice(slc_lon.start*tgt_fac_dom,slc_lon.stop*tgt_fac_dom))
+    latlon = (gg_cur.lats[sub_slice],gg_cur.lons[sub_slice])
+    print(latlon[0].shape, latlon[1].shape)
     return res_final, np.stack(latlon, axis=-1)
 
 def get_latlon_slice_bounds(lats, lons, lat_bounds=None, lon_bounds=None,

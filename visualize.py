@@ -79,8 +79,8 @@ if __name__=="__main__":
 
     ## result pkls are stratified by domain, listing, ToD and band
     include_only = {
-        "domain":["geom-goes-conus-1"], ## G19E
-        #"domain":["geom-goes-conus-0"], ## G19E
+        #"domain":["geom-goes-conus-1"], ## G19E
+        "domain":["geom-goes-conus-0"], ## G19E
         "listing":["clearland-l1b-c0"],
         #"tod":["64800"], ## in seconds, only 18z
         "tod":["54000","64800","75600"], ## in seconds, only 18z
@@ -115,13 +115,13 @@ if __name__=="__main__":
             merged,latlon = load_welford_grids(
                     pkl_paths=mrg_paths,
                     geom_dir=geom_dir,
-                    #lat_bounds=lat_bounds,
-                    #lon_bounds=lon_bounds,
+                    lat_bounds=lat_bounds,
+                    lon_bounds=lon_bounds,
                     subgrid_rule="complete",
                     reduce_func=np.nanmean,
                     metrics=None, ## TODO: implement metric subset after merge
                     merge=True,
-                    res_factor=1,
+                    res_factor=4,
                     )
             for k,v in merged.items():
                 print(k, v.shape, latlon.shape)
