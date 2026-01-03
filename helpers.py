@@ -334,8 +334,13 @@ def merge_welford(w1, w2):
         for k in b1.keys():
             new[k][mv_both] = bth[k]
         for k in no_merge:
-            assert w1[k]==w2[k], f"Mismatching {k}:({w1[k]}, {w2[k]})"
-            new[k] = w1[k]
+            if k not in w1.keys():
+                new[k] = w2[k]
+            elif k not in w2.keys():
+                new[k] = w1[k]
+            else:
+                assert w1[k]==w2[k], f"Mismatching {k}:({w1[k]}, {w2[k]})"
+                new[k] = w1[k]
     return new
 
 def get_closest_latlon(self, lat, lon):
