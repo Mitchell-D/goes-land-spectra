@@ -6,6 +6,88 @@ adapted from emulate_era5_land.helpers
 """
 import numpy as np
 from pathlib import Path
+import pickle as pkl
+from multiprocessing import Pool
+
+config_labels = ["target_avg_dist", "roll_threshold", "threshold_diminish",
+        "recycle_count", "seed", "dynamic_roll_threshold"]
+config_labels_conv = ["dist_threshold", "reperm_cap", "shuffle_frac", "seed"]
+
+def permutations_from_configs(
+        dataset_name, coords, configs, pkl_dir, mode="conv", seed=None,
+        enum_start=0, max_iterations=64, return_stats=True, nworkers=1,
+        debug=True):
+    """
+    Generate a bunch of permutations given a list of parameter configurations
+
+    if mode==conv, expects cofnigurations to be a list of 4-tuples:
+        ("dist_threshold", "reperm_cap", "shuffle_frac", "seed"),
+
+    if mode==global, expects configurations to be a list of
+        ("target_avg_dist", "roll_threshold", "threshold_diminish",
+            "recycle_count", "seed", "dynamic_roll_threshold")
+
+    :@param dataset_name: unique string for this coordinate aset
+    :@param coords: 2d array (N,C) for N points with C coordinate axes
+    :@param configs: list of tuple configs as specified above
+    :@param pkl_dir: directory where generated pkls will be stored
+    @param mode: must be 'conv' or 'global'
+    """
+    out_paths = []
+    ## Generate a bunch of permutations given different parameters
+    if mode == "global":
+        init_perm = np.arange(coords.shape[0])
+        rng = np.random.default_rng(seed=seed)
+        rng.shuffle(init_perm)
+        default_args = {
+                "coord_array":coords,
+                "initial_perm":init_perm,
+                "max_iterations":max_iterations,
+                #"max_iterations":3,
+                "return_stats":return_stats,
+                "debug":debug,
+                }
+
+        args = [{**dict(zip(config_labels,c)),**default_args} for c in configs]
+        with Pool(nworkers) as pool:
+            for i,(a,r) in enumerate(
+                    pool.imap_unordered(mp_get_permutation,args),
+                    enum_start):
+                perm,stats = r
+                r_perm = np.asarray(tuple(zip(*sorted(zip(
+                    list(perm), range(len(perm))
+                    ), key=lambda v:v[0])))[1])
+                pkl_path = pkl_dir.joinpath(
+                        f"permutation_{dataset_name}_cycle_{i:03}.pkl")
+                pkl.dump((a, np.stack([perm,r_perm], axis=-1), stats),
+                        pkl_path.open("wb"))
+                out_paths.append(pkl_path)
+            enum_start += len(out_paths)
+
+    ## Use convolutional method to generate some permutations
+    elif mode == "conv":
+        default_args = {"coord_array":coords, "return_stats":return_stats,
+                        "debug":debug}
+        args = [{
+            **dict(zip(config_labels_conv,c)), **default_args
+            } for c in configs]
+        with Pool(nworkers) as pool:
+            for i,(a,r) in enumerate(
+                    pool.imap_unordered(mp_get_permutation_conv,args),
+                    enum_start):
+                perm,stats = r
+                r_perm = np.asarray(tuple(zip(*sorted(zip(
+                    list(perm), range(len(perm))
+                    ), key=lambda v:v[0])))[1])
+                pkl_path = pkl_dir.joinpath(
+                    f"permutation_{dataset_name}_conv_{i:03}.pkl")
+                pkl.dump((a, np.stack([perm,r_perm], axis=-1), stats),
+                        pkl_path.open("wb"))
+                out_paths.append(pkl_path)
+
+    else:
+        raise ValueError(f"mode must be oneo f ['global', 'conv'], not {mode}")
+    return out_paths
 
 def get_permutation_inverse(perm:np.array):
     """

@@ -8,6 +8,99 @@ from datetime import datetime,timedelta
 from cartopy.mpl.ticker import LatitudeFormatter,LongitudeFormatter
 from matplotlib.colors import ListedColormap
 
+def plot_geo_rgb_basic(rgb:np.ndarray, lat_range:tuple, lon_range:tuple,
+        plot_spec:dict={}, fig_path=None, show=False):
+    """
+    """
+    ps = {"title":"", "figsize":(16,12), "border_linewidth":2,
+            "title_size":12 }
+    ps.update(plot_spec)
+    fig = plt.figure(figsize=ps.get("figsize"))
+
+    pc = ccrs.PlateCarree()
+
+    ax = fig.add_subplot(1, 1, 1, projection=pc)
+    extent = [*lon_range, *lat_range]
+    ax.set_extent(extent, crs=pc)
+
+    ax.imshow(rgb, extent=extent, transform=pc)
+
+    ax.coastlines(
+            color=ps.get("border_color", "black"),
+            linewidth=ps.get("border_linewidth"))
+    ax.add_feature(
+            ccrs.cartopy.feature.STATES,
+            #color=ps.get("border_color", "black"),
+            linewidth=ps.get("border_linewidth")
+            )
+
+    plt.title(ps.get("title"), fontweight='bold',
+            fontsize=ps.get("title_size"))
+
+    if not fig_path is None:
+        fig.savefig(fig_path.as_posix(), bbox_inches="tight", dpi=80)
+    if show:
+        plt.show()
+    plt.close()
+    return
+
+def plot_multiy_lines(data, xaxis, plot_spec={},
+        show=False, fig_path=None):
+    """
+    """
+    ps = {"fig_size":(12,6), "dpi":80, "spine_increment":.01,
+            "date_format":"%Y-%m-%d", "xtick_rotation":30}
+    ps.update(plot_spec)
+    if len(xaxis) != len(data[0]):
+        raise ValueError(
+                "Length of 'xaxis' must match length of each dataset.")
+
+    fig,host = plt.subplots(figsize=ps.get("fig_size"))
+    fig.subplots_adjust(left=0.2 + ps.get("spine_increment") \
+            * (len(data) - 1))
+
+    axes = [host]
+    colors = ps.get("colors", ["C" + str(i) for i in range(len(data))])
+    y_labels = ps.get("y_labels", [""] * len(data))
+    y_ranges = ps.get("y_ranges", [None] * len(data))
+
+    ## Create additional y-axes on the left, offset horizontally
+    for i in range(1, len(data)):
+        ax = host.twinx()
+        #ax.spines["left"] = ax.spines["right"]
+        ax.yaxis.set_label_position("left")
+        ax.yaxis.set_ticks_position("left")
+        ax.spines["left"].set_position(
+                ("axes", -1*ps.get("spine_increment") * i))
+        axes.append(ax)
+
+    ## Plot each series
+    for i, (ax, series) in enumerate(zip(axes, data)):
+        ax.plot(xaxis, series, color=colors[i], label=y_labels[i])
+        ax.set_ylabel(y_labels[i], color=colors[i],
+                fontsize=ps.get("label_size"))
+        ax.tick_params(axis="y", colors=colors[i])
+        if y_ranges[i] is not None:
+            ax.set_ylim(y_ranges[i])
+
+    host.set_xlabel(ps.get("x_label", "Time"), fontsize=ps.get("label_size"))
+    host.tick_params(axis="x", rotation=ps.get("xtick_rotation"))
+
+    if plot_spec.get("xtick_align"):
+        plt.setp(host.get_xticklabels(),
+                horizontalalignment=plot_spec.get("xtick_align"))
+
+    if ps.get("zero_axis"):
+        host.axhline(0, color="black")
+
+    plt.title(ps.get("title", ""), fontdict={"fontsize":ps.get("title_size")})
+    plt.tight_layout()
+    if show:
+        plt.show()
+    if not fig_path is None:
+        fig.savefig(fig_path, bbox_inches="tight", dpi=plot_spec.get("dpi"))
+    plt.close()
+
 def plot_geo_rgb(rgb_data, lat, lon, shapes=None,
     geo_bounds=None, latlon_ticks=True,
     int_labels=None, fig_path=None, cbar_ticks=False,
@@ -89,7 +182,7 @@ def plot_geo_rgb(rgb_data, lat, lon, shapes=None,
     return
 
 def plot_geo_ints(int_data, lat, lon, shapes=None,
-    geo_bounds=None, latlon_ticks=True,
+    geo_bounds=None, latlon_ticks=False,
     int_labels=None, fig_path=None, cbar_ticks=False, colors=None,
     show=False, plot_spec={}):
     """
@@ -136,7 +229,7 @@ def plot_geo_ints(int_data, lat, lon, shapes=None,
                 edgecolor=ps.get("border_color", "black"),
                 )
     if geo_bounds is None:
-        geo_bounds = [np.amin(lon), np.amax(lon), np.amin(lat), np.amax(lat)]
+        geo_bounds = [np.nanmin(lon), np.nanmax(lon), np.nanmin(lat), np.nanmax(lat)]
     ax.set_extent(geo_bounds, crs=ccrs.PlateCarree())
 
     m_invalid = ~np.isfinite(int_data)
@@ -206,7 +299,7 @@ def plot_geo_ints(int_data, lat, lon, shapes=None,
     plt.close()
     return
 
-def plot_geo_scalar(data, latitude, longitude, hatch_data=None, shapes=None,
+def plot_geo_scalar(data, lat, lon, hatch_data=None, shapes=None,
         bounds=None, plot_spec={}, latlon_ticks=False, show=False,
         fig_path=None, use_contours=False):
     """
@@ -221,17 +314,24 @@ def plot_geo_scalar(data, latitude, longitude, hatch_data=None, shapes=None,
         "shape_params":{"edgecolor":"black"},
         "cartopy_feats":["land", "borders", "states"],
         "cbar_extendfrac":0.05, "custom_cmap_params":None,
+        "proj":"plate_carree", "proj_args":{},
         }
     plt.clf()
     ps.update(plot_spec)
     plt.rcParams.update({"font.size":ps["text_size"]})
 
-    ax = plt.axes(projection=ccrs.PlateCarree())
+    crs_type = {
+        "plate_carree":ccrs.PlateCarree,
+        "geostationary":ccrs.Geostationary,
+        }
+    ## for geostationary, need central_longitude and satellite_height args
+    crs = crs_type[ps.get("proj")](**ps.get("proj_args"))
+    ax = plt.axes(projection=crs)
     fig = plt.gcf()
     if bounds is None:
-        bounds = [np.amin(longitude), np.amax(longitude),
-                  np.amin(latitude), np.amax(latitude)]
-    ax.set_extent(bounds, crs=ccrs.PlateCarree())
+        bounds = [np.amin(lon), np.amax(lon),
+                  np.amin(lat), np.amax(lat)]
+    ax.set_extent(bounds, crs=crs)
 
     ax.add_feature(cfeature.LAND, linewidth=ps.get("map_linewidth"))
     #ax.add_feature(cfeature.LAKES, linewidth=ps.get("map_linewidth"))
@@ -261,18 +361,19 @@ def plot_geo_scalar(data, latitude, longitude, hatch_data=None, shapes=None,
             "norm":ps.get("vmax"),
             }
 
+    print(lon.shape, lat.shape, data.shape)
     if use_contours:
-        scat = ax.contourf(longitude, latitude, data, **cmap_params)
+        scat = ax.contourf(lon, lat, data, **cmap_params)
     else:
-        scat = ax.pcolormesh(longitude, latitude, data, **cmap_params)
+        scat = ax.pcolormesh(lon, lat, data, **cmap_params)
 
     if latlon_ticks:
         lonmin,lonmax,latmin,latmax = bounds
         frq = ps.get("tick_frequency", 1)
         ax.set_yticks(np.linspace(latmin,latmax,data.shape[0])[::frq],
-                crs=ccrs.PlateCarree())
+                crs=crs)
         ax.set_xticks(np.linspace(lonmin,lonmax,data.shape[1])[::frq],
-                crs=ccrs.PlateCarree())
+                crs=crs)
         lon_formatter = LongitudeFormatter(zero_direction_label=True)
         lat_formatter = LatitudeFormatter()
         ax.xaxis.set_major_formatter(lon_formatter)
@@ -281,8 +382,8 @@ def plot_geo_scalar(data, latitude, longitude, hatch_data=None, shapes=None,
 
     if not hatch_data is None:
         hatch_plot = ax.contourf(
-            longitude,
-            latitude,
+            lon,
+            lat,
             hatch_data.astype(int),
             levels=[0.5,1.5],
             hatches=ps.get("hatch_style"),
@@ -291,21 +392,8 @@ def plot_geo_scalar(data, latitude, longitude, hatch_data=None, shapes=None,
             #edgecolor=ps.get("hatch_edgecolor"),
             )
 
-        '''
-        ax.pcolormesh(
-            longitude,
-            latitude,
-            hatch_data,
-            shading=ps.get("shading", "auto"),
-            facecolor=ps.get("hatch_facecolor"),
-            edgecolor=ps.get("hatch_edgecolor"),
-            hatch=ps.get("hatch_style"),
-            linewidth=ps.get("hatch_linewidth"),
-            )
-        '''
-
     if not shapes is None:
-        ax.add_geometries(shapes, ccrs.PlateCarree(), **ps.get("shape_params"))
+        ax.add_geometries(shapes, crs, **ps.get("shape_params"))
 
     if "land" in ps.get("cartopy_feats"):
         ax.add_feature(
@@ -353,113 +441,128 @@ def plot_geo_scalar(data, latitude, longitude, hatch_data=None, shapes=None,
         plt.show()
     plt.close()
 
-def mp_plot_binary_smvi(args):
-    return plot_binary_smvi(**args)
-def plot_binary_smvi(
-        int_data, lat, lon, fstr, fig_path, polys, date, smvi_thresh):
+def plot_geo_tiles(data, lat, lon, shapes=None,
+        bounds=None, plot_spec={}, show=False,
+        fig_path=None):
     """
+    given 1d data, lat, and lon arrays, use tricontourf delauny tessellation
+    to create a smooth plot
     """
-    tstr = date.strftime("%Y%m%d")
-    tstr2 = date.strftime("%Y-%m-%d")
-    plot_geo_ints(
-        int_data=int_data,
-        lat=lat,
-        lon=lon,
-        int_labels=[
-            "Out of Domain",
-            f"SMVI Fraction <= {smvi_thresh}",
-            f"SMVI Fraction > {smvi_thresh}",
-            ],
-        fig_path=fig_path,
-        latlon_ticks=False,
-        shapes=polys,
-        cbar_ticks=True,
-        plot_spec={
-            "cbar_pad":0.02,
-            "cbar_orient":"horizontal",
-            "cbar_shrink":.8,
-            "cbar_fontsize":14,
-            "tick_frequency":12,
-            "tick_rotation":45,
-            "title":f"Counties with >{smvi_thresh*100}% SMVI" + \
-                    f" {fstr} ({tstr2})",
-            "tile_fontsize":18,
-            "interpolation":"none",
-            "shape_params":{
-                "edgecolor":"silver",
-                "facecolor":"none",
-                "alpha":.85,
-                },
-            },
-        colors=["#3D74B6", "#FBF5DE", "#DC3C22"],
-        )
-    return fig_path
+    ps = {
+        "xlabel":"", "ylabel":"", "marker_size":4, "cmap":"jet_r", "dpi":200,
+        "text_size":12, "title":"", "norm":"linear","figsize":None,
+        "marker":"o", "cbar_shrink":1., "map_linewidth":2,
+        "shape_params":{"edgecolor":"black"},
+        "cartopy_feats":["land", "borders", "states"],
+        "cbar_extendfrac":0.05, "custom_cmap_params":None,
+        "proj_in":"plate_carree", "proj_in_args":{},
+        "proj_out":"plate_carree", "proj_out_args":{},
+        }
+    plt.clf()
+    ps.update(plot_spec)
+    plt.rcParams.update({"font.size":ps["text_size"]})
 
-def mp_plot_percentile_and_smvi(args):
-    return plot_percentile_and_smvi(**args)
-def plot_percentile_and_smvi(
-        percentile_data, smvi_data, lat, lon, fstr, fig_path, polys, date,
-        smvi_thresh):
-    """
-    """
-    tstr = date.strftime("%Y%m%d")
-    tstr2 = date.strftime("%Y-%m-%d")
-    plot_geo_scalar(
-        data=percentile_data,
-        latitude=lat,
-        longitude=lon,
-        hatch_data=smvi_data,
-        shapes=polys,
-        latlon_ticks=False,
-        show=False,
-        fig_path=fig_path,
-        plot_spec={
-            "title":f"{fstr} percentile, hatched " + \
-                    f"SMVI>{smvi_thresh*100}% ({tstr2})",
-            "cbar_shrink":.9,
-            "cbar_spacing":"proportional",
-            "cbar_extend":"both",
-            "cbar_orient":"horizontal",
-            "cbar_pad":.05,
-            "hatch_shading":"auto",
-            "hatch_edgecolor":"none",
-            "hatch_style":["xxx"],
-            "hatch_facecolor":"none",
-            "border_linewidth":1.2,
-            "fontsize_labels":8,
-            "custom_cmap_params":{
-                "colors":[
-                    [0.4196, 0.0, 0.0], ## 2-5
-                    [0.9216, 0.0, 0.0], ## 5-10
-                    [0.9216, 0.4588, 0.0], ## 10-20
-                    [1.0, 0.702, 0.4], ## 20-30
-                    [0.7843, 0.7843, 0.7843], ## 30-70
-                    [0.5882, 0.8235, 0.9804], ## 70-80
-                    [0.3137, 0.6471, 0.9608], ## 80-90
-                    [0.1569, 0.5098, 0.9412], ## 90-95
-                    [0.0784, 0.3922, 0.8235], ## 95-98
-                    #"#C52104", ## 2-5
-                    #"#FA5B0F", ## 5-10
-                    #"#F28705", ## 10-20
-                    #"#F2B807", ## 20-30
-                    #"#FEF7CC", ## 30-50
-                    #"#CCD3FE", ## 50-70
-                    #"#E3E1E1", ## 30-70
-                    #"#2998FF", ## 70-80
-                    #"#0068C4", ## 80-90
-                    #"#004B8D", ## 90-95
-                    #"#00294D", ## 95-98
-                    ],
-                "bounds":[2,5,10,20,30,70,80,90,95,98],
-                "extremes":("#710301", "#082136"),
-                },
-            "shape_params":{
-                "edgecolor":"black",
-                "linewidth":.5,
-                "facecolor":"none",
-                "alpha":.8,
-                },
-            "dpi":120,
-            },
-        )
-    return fig_path
+    crs_type = {
+        "plate_carree":ccrs.PlateCarree,
+        "geostationary":ccrs.Geostationary,
+        }
+    ## for geostationary, need central_longitude and satellite_height args
+    crs = crs_type[ps.get("proj_in")](**ps.get("proj_in_args"))
+    crs_out = crs_type[ps.get("proj_out")](**ps.get("proj_out_args"))
+    ax = plt.axes(projection=crs_out)
+    fig = plt.gcf()
+    #if bounds is None:
+    #    bounds = [np.amin(lon), np.amax(lon),
+    #              np.amin(lat), np.amax(lat)]
+    #ax.set_extent(bounds, crs=crs)
+
+    ax.add_feature(cfeature.LAND, linewidth=ps.get("map_linewidth"))
+
+    ax.set_title(ps.get("title"), fontsize=ps.get("fontsize_title", 12))
+    ax.set_xlabel(ps.get("xlabel"), fontsize=ps.get("fontsize_labels", 10))
+    ax.set_ylabel(ps.get("ylabel"), fontsize=ps.get("fontsize_labels", 10))
+
+    '''
+    cmap_params = {}
+    if not ps.get("custom_cmap_params") is None:
+        ccp = ps["custom_cmap_params"]
+        cmap = matplotlib.colors.ListedColormap(ccp["colors"])
+        if "extremes" in ccp.keys():
+            assert isinstance(ccp["extremes"], (list,tuple))
+            exlow,exhigh = ccp["extremes"]
+            #cmap = cmap.with_extremes(under=exlow, over=exhigh)
+            cmap.set_over(exhigh)
+            cmap.set_under(exlow)
+        norm = matplotlib.colors.BoundaryNorm(ccp["bounds"], cmap.N)
+        cmap_params = {"cmap":cmap, "norm":norm}
+    else:
+        cmap_params = {
+            "cmap":ps.get("cmap"),
+            "norm":ps.get("norm"),
+            "vmin":ps.get("vmin"),
+            "vmax":ps.get("vmax"),
+            }
+    '''
+
+    proj_pts = crs_out.transform_points(crs, lon, lat)
+
+    tiles = ax.tricontourf(
+            proj_pts[...,0],
+            proj_pts[...,1],
+            data,
+            cmap=ps.get("cmap"),
+            norm=ps.get("norm", "linear"),
+            vmin=ps.get("vmin"),
+            vmax=ps.get("vmax"),
+            levels=ps.get("levels", 32),
+            zorder=1
+            )
+
+    if not shapes is None:
+        ax.add_geometries(shapes, crs_out, **ps.get("shape_params"))
+
+    if "land" in ps.get("cartopy_feats"):
+        ax.add_feature(
+                cfeature.LAND,
+                zorder=3,
+                )
+    if "borders" in ps.get("cartopy_feats"):
+        ax.add_feature(
+                cfeature.BORDERS,
+                linestyle=ps.get("border_style", "-"),
+                linewidth=ps.get("border_linewidth", 2),
+                edgecolor=ps.get("border_color", "black"),
+                zorder=3,
+                )
+    if "states" in ps.get("cartopy_feats"):
+        ax.add_feature(
+                cfeature.STATES,
+                linestyle=ps.get("border_style", "-"),
+                linewidth=ps.get("border_linewidth", 2),
+                edgecolor=ps.get("border_color", "black"),
+                zorder=3,
+                )
+
+    cbar = fig.colorbar(
+            tiles,
+            ax=ax,
+            shrink=ps.get("cbar_shrink"),
+            label=ps.get("cbar_label"),
+            orientation=ps.get("cbar_orient", "vertical"),
+            pad=ps.get("cbar_pad", 0.0),
+            norm=ps.get("norm"),
+            extendfrac=ps.get("cbar_extendfrac"),
+            spacing=ps.get("cbar_spacing", "uniform"),
+            extend=ps.get("cbar_extend", "both"),
+            )
+    cbar.ax.tick_params(labelsize=ps.get("fontsize_labels", 10))
+    tiles.figure.axes[0].tick_params(
+            axis="both", labelsize=ps.get("fontsize_labels",10))
+
+    if not fig_path is None:
+        if not ps.get("figsize") is None:
+            fig.set_size_inches(*ps.get("figsize"))
+        fig.savefig(fig_path.as_posix(), bbox_inches="tight",dpi=ps.get("dpi"))
+    if show:
+        plt.show()
+    plt.close()
