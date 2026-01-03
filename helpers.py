@@ -240,7 +240,6 @@ def merge_welford(w1, w2):
     new = {
         "count":np.full(w1["count"].shape, 0, dtype=np.float32),
         "min":np.full(w1["count"].shape, np.nan, dtype=np.float32),
-        "min":np.full(w1["count"].shape, np.nan, dtype=np.float32),
         "max":np.full(w1["count"].shape, np.nan, dtype=np.float32),
         "m1":np.full(w1["count"].shape, np.nan, dtype=np.float32),
         "m2":np.full(w1["count"].shape, np.nan, dtype=np.float32),
@@ -260,7 +259,7 @@ def merge_welford(w1, w2):
         new["count"][mv_only_w2] = w2["count"][mv_only_w2]
         new["min"][mv_only_w2] = w2["min"][mv_only_w2]
         new["max"][mv_only_w2] = w2["max"][mv_only_w2]
-        new["m2"][mv_only_w2] = w2["m1"][mv_only_w2]
+        new["m1"][mv_only_w2] = w2["m1"][mv_only_w2]
         new["m2"][mv_only_w2] = w2["m2"][mv_only_w2]
         new["m3"][mv_only_w2] = w2["m3"][mv_only_w2]
         new["m4"][mv_only_w2] = w2["m4"][mv_only_w2]
