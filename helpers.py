@@ -19,6 +19,29 @@ TEMP = {
     "C15":(1500,2500),
     }
 
+def finalize_welford(welford:dict):
+    """
+    Given a set of welford arrays as stored in results pkls, calculate the
+    stddev and higher moments by renormalizing them.
+    """
+    n = welford["count"]
+    results = {}
+    results["count"] = n
+    if "m1" in welford.keys():
+        results["mean"] = welford["m1"]
+    if "m2" in welford.keys():
+        variance = welford["m2"] / n
+        results["stddev"] = np.sqrt(variance)
+    if "m3" in welford.keys():
+        results["skewness"] = (welford["m3"] / n) / (variance ** 1.5)
+    if "m4" in welford.keys():
+        results["kurtosis"] = (welford["m4"] / n) / (variance ** 2)
+    if "min" in welford.keys():
+        results["min"] = welford["min"]
+    if "max" in welford.keys():
+        results["max"] = welford["max"]
+    return results
+
 def load_welford_grids(pkl_paths:list, geom_dir:Path,
         lat_bounds=None, lon_bounds=None, subgrid_rule="complete",
         reduce_func=np.nanmean, metrics=None, merge=False, res_factor=1):
@@ -329,3 +352,56 @@ def get_closest_latlon(self, lat, lon):
     min_idx = tuple([ int(c[0]) for c in
         np.where(total_diff == np.amin(total_diff)) ])
     return min_idx
+
+class QueryResults:
+    """
+    search files given a common underscore-separated file structure.
+    """
+    def __init__(self, file_paths, name_fields):
+        self._p = file_paths
+        self._f = name_fields
+
+    @property
+    def paths(self):
+        return self._p
+
+    @property
+    def tups(self):
+        return list(map(lambda r:(r,r.stem.split("_")), self._p))
+
+    def set_paths(self, file_paths):
+        self._p = file_paths
+
+    def add_paths(self, file_paths):
+        self._p = list(set(*self._p,*file_paths))
+
+    def subset(self, sub_dict=None, **kwargs):
+        if not sub_dict is None:
+            kwargs = {**sub_dict, **kwargs}
+        for k,v in kwargs.items():
+            assert k in self._f,f"{k} must be in {self._f}"
+        sub_paths,_ = zip(*[
+            (p,pt) for p,pt in self.tups
+            if all(any((pt[i]==s) if isinstance(s,str) else (pt[i] in s)
+                for s in kwargs.get(k,[pt[i]])) for i,k in enumerate(self._f))
+            ])
+        return QueryResults(sub_paths, self._f)
+
+    def __repr__(self):
+        return list(map(lambda p:p.as_posix(),self._p))
+
+    def group(self, group_fields:list, invert=False):
+        """
+        return pkls that share a combination of group_fields
+        """
+        groups = {}
+        assert all(f in self._f for f in group_fields),group_fields
+        if invert:
+            group_fields = list(set(self._f)-set(group_fields))
+        gixs = [self._f.index(f) for f in group_fields]
+        for p,t in self.tups:
+            gkey = tuple(t[ix] for ix in gixs)
+            if gkey not in groups.keys():
+                groups[gkey] = []
+            groups[gkey].append(p)
+        return groups

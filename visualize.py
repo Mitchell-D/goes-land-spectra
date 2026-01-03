@@ -7,60 +7,7 @@ from pprint import pprint
 
 from GeosGeom import GeosGeom
 from plotting import plot_geo_rgb,plot_geo_scalar
-from helpers import load_welford_grids
-
-class QueryResults:
-    """
-    search files given a common underscore-separated file structure.
-    """
-    def __init__(self, file_paths, name_fields):
-        self._p = file_paths
-        self._f = name_fields
-
-    @property
-    def paths(self):
-        return self._p
-
-    @property
-    def tups(self):
-        return list(map(lambda r:(r,r.stem.split("_")), self._p))
-
-    def set_paths(self, file_paths):
-        self._p = file_paths
-
-    def add_paths(self, file_paths):
-        self._p = list(set(*self._p,*file_paths))
-
-    def subset(self, sub_dict=None, **kwargs):
-        if not sub_dict is None:
-            kwargs = {**sub_dict, **kwargs}
-        for k,v in kwargs.items():
-            assert k in self._f,f"{k} must be in {self._f}"
-        sub_paths,_ = zip(*[
-            (p,pt) for p,pt in self.tups
-            if all(any((pt[i]==s) if isinstance(s,str) else (pt[i] in s)
-                for s in kwargs.get(k,[pt[i]])) for i,k in enumerate(self._f))
-            ])
-        return QueryResults(sub_paths, self._f)
-
-    def __repr__(self):
-        return list(map(lambda p:p.as_posix(),self._p))
-
-    def group(self, group_fields:list, invert=False):
-        """
-        return pkls that share a combination of group_fields
-        """
-        groups = {}
-        assert all(f in self._f for f in group_fields),group_fields
-        if invert:
-            group_fields = list(set(self._f)-set(group_fields))
-        gixs = [self._f.index(f) for f in group_fields]
-        for p,t in self.tups:
-            gkey = tuple(t[ix] for ix in gixs)
-            if gkey not in groups.keys():
-                groups[gkey] = []
-            groups[gkey].append(p)
-        return groups
+from helpers import load_welford_grids,finalize_welford,QueryResults
 
 if __name__=="__main__":
     #proj_root = Path("/rhome/mdodson/goes-land-spectra")
@@ -70,6 +17,7 @@ if __name__=="__main__":
     ## directory where pkls of listings will be stored.
     listing_dir = proj_root.joinpath("data/listings")
     out_dir = proj_root.joinpath("data/results")
+    fig_dir = proj_root.joinpath("figures")
 
     name_fields = ["satellite","listing", "stime", "ftime",
             "domain", "month", "tod", "band"]
@@ -83,8 +31,11 @@ if __name__=="__main__":
         "domain":["geom-goes-conus-0"], ## G19E
         "listing":["clearland-l1b-c0"],
         #"tod":["64800"], ## in seconds, only 18z
-        "tod":["54000","64800","75600"], ## in seconds, only 18z
-        "month":["11","12","01"],
+        #"tod":["54000","64800","75600"], ## in seconds, only 18z
+        "tod":["0"], ## in seconds, only 18z
+        "month":["01",],
+        "band":["C13"]
+        #"month":["11","12","01"],
         #"month":["07",],
         }
 
@@ -123,8 +74,12 @@ if __name__=="__main__":
                     merge=True,
                     res_factor=4,
                     )
+            merged = finalize_welford(merged)
             for k,v in merged.items():
                 print(k, v.shape, latlon.shape)
+                out_str = f"{ptype}_{'_'.join(mrg_keys)}_{k}_" + \
+                        '-'.join(merge_over)
+                out_path = fig_dir.joinpath(out_str)
                 plot_geo_scalar(
                     data=merged[k],
                     latitude=latlon[...,0],
@@ -132,7 +87,8 @@ if __name__=="__main__":
                     plot_spec={
                         "cbar_orient":"horizontal",
                         },
-                    show=True,
+                    fig_path=out_path,
+                    show=False,
                     )
 
     ## sanity check valid counts in results dir
