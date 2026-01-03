@@ -171,7 +171,7 @@ def load_welford_grids(pkl_paths:list, geom_dir:Path,
     sub_slice = (slice(slc_lat.start*tgt_fac_dom,slc_lat.stop*tgt_fac_dom),
             slice(slc_lon.start*tgt_fac_dom,slc_lon.stop*tgt_fac_dom))
     latlon = (gg_cur.lats[sub_slice],gg_cur.lons[sub_slice])
-    print(latlon[0].shape, latlon[1].shape)
+    #print(latlon[0].shape, latlon[1].shape)
     return res_final, np.stack(latlon, axis=-1)
 
 def get_latlon_slice_bounds(lats, lons, lat_bounds=None, lon_bounds=None,
@@ -235,10 +235,10 @@ def merge_welford(w1, w2):
     mv_only_w1 = mv_w1 & ~mv_w2
     mv_only_w2 = mv_w2 & ~mv_w1
 
-    print(f"merging",mv_w1.shape,mv_w2.shape)
+    #print(f"merging",mv_w1.shape,mv_w2.shape, (np.count_nonzero(mv_only_w1), np.count_nonzero(mv_only_w2), np.count_nonzero(mv_both)))
 
     new = {
-        "count":np.full(w1["count"].shape, np.nan, dtype=np.float32),
+        "count":np.full(w1["count"].shape, 0, dtype=np.float32),
         "min":np.full(w1["count"].shape, np.nan, dtype=np.float32),
         "min":np.full(w1["count"].shape, np.nan, dtype=np.float32),
         "max":np.full(w1["count"].shape, np.nan, dtype=np.float32),

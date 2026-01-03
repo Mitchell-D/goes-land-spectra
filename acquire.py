@@ -230,33 +230,39 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
                 for i,l in enumerate(mlabels)
                 if l.split(" ")[-1] in masks_to_apply
                 ], axis=0), axis=0)
+        print(f"m_valid {dstr} {sstr}", np.count_nonzero(m_valid)/m_valid.size)
 
         ## atomically ensure the existence of and load the current satellite
         ## geometry and previous domain mask
         #geom_index_lock.acquire()
         with geom_index_lock:
-            print(f"Acquired {geom_index_lock}", flush=True)
             geom_path = dump_geos_geom(
                     geom_dir=geom_dir,
                     cur_geom=proj,
                     cur_shape=m_valid.shape,
                     nc_path=lmask_path,
                     domain_mask=masks[mlabels.index("m_land")],
+                    #domain_mask=np.full(
+                    #    masks[mlabels.index("m_land")].shape, True),
                     )
             gg,m_domain = load_geos_geom(
                     geom_path,
                     shape=masks[mlabels.index("m_land")].shape
                     )
-            print(f"Released {geom_index_lock}", flush=True)
         #geom_index_lock.release()
         domain_size = np.count_nonzero(m_domain)
 
+        print(f"{domain_size=}")
+
+        '''
+        ## a single worker may get listings with different geoms, so
         gkey = geom_path.stem
-        if gkey in rad_results.keys():
-            assert sstr not in rad_results[gkey].keys()
-            rad_results[gkey][sstr] = {}
+        if gkey in all_results.keys():
+            assert sstr not in all_results[gkey].keys()
+            all_results[gkey][sstr] = {}
         else:
-            rad_results[gkey] = {sstr:{}}
+            all_results[gkey] = {sstr:{}}
+        '''
 
         #m_domain_valid = m_domain[m_valid]
         bands,rad_paths,radiances,valid_masks,meta = zip(*[
@@ -298,7 +304,6 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
                 ## add the new scan angles if this is a new shape
                 #geom_index_lock.acquire()
                 with geom_index_lock:
-                    print(f"Acquired {geom_index_lock}")
                     dump_geos_geom(
                         geom_dir=geom_dir,
                         cur_geom=proj,
@@ -307,20 +312,20 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
                         domain_mask=np.repeat(np.repeat(
                             m_domain,yfac,axis=0),xfac,axis=1),
                         )
-                    print(f"Released {geom_index_lock}")
                 #geom_index_lock.release()
             m_rad = m_tmp&m_valid if m_rad is None else m_rad&m_tmp
 
-        rad_results = {
-            (geom_path.stem, dstr[4:6], str(sstr), bk):None
-            for bk in bands
-            }
+        ## results for this timestep
+        #rad_results = {
+        #    (geom_path.stem, dstr[4:6], str(sstr), bk):None
+        #    for bk in bands
+        #    }
 
-        #m_dom_cur = m_rad[m_domain]
         for band,rad,fac in zip(bands,radiances,res_facs):
+            ## (geom, month, tod, band)
             rkey = (geom_path.stem, dstr[4:6], str(sstr), band)
             print(f"handling {dstr} {rkey}")
-            if rad_results[rkey] is None:
+            if rad_results.get(rkey) is None:
                 tmp_size = domain_size * fac**2
                 rad_results[rkey] = {
                     ## float64 since it must be used as a denominator
@@ -394,6 +399,9 @@ def get_goes_l1b_and_masks(geom_dir:Path, bucket:str, listing:list,
         if delete_files:
             for p in paths:
                 p.unlink()
+        if debug:
+            print(f"counts {dstr} {rkey} (PID {current_process().pid})",
+                    np.unique(rad_results[rkey]["count"], return_counts=True))
     if debug:
         dt = time.perf_counter() - t0
         print(f"worker px/sec: {px_counter/dt}")
@@ -495,8 +503,9 @@ def load_valid_mask(lst_nc_path:Path):
         "sweep_angle_axis": proj.sweep_angle_axis
         }
     dqf = ds["DQF"][...]
-    mlabels = ["m_valid", "m_clear", "m_vza", "m_land", "m_value"]
-    masks = [(dqf&b)==0 for b in [2,4,8,16,32]]
+    dqf_valid = dqf>=0
+    mlabels = ["m_valid", "m_land"]
+    masks = [dqf_valid & (dqf==0), dqf_valid & ((dqf&16)==0)]
     ds.close()
     return mlabels,masks,proj
 
@@ -658,7 +667,7 @@ if __name__=="__main__":
 
     ## on meteor, head calc:~6.5s sometimes, worker ~5e6 px/sec NOT inc. DL
     #nworkers,batch_size = 8,24 ##
-    nworkers,batch_size = 11,12 ##
+    nworkers,batch_size = 8,8 ##
 
     ## identifying name of this dataset for the listing pkl
     listing_name = f"goes{gver}_clearland-l1b-c0" ## lmask&l1b combo 0
@@ -733,7 +742,13 @@ if __name__=="__main__":
     if acq_path.exists() and not overwrite_results:
         loaded = pkl.load(acq_path.open("rb"))
         print(f"ignoring {len(loaded)} already-loaded timesteps")
-    listing = list(filter(lambda l:l[0] not in loaded, listing))
+    ## subset to not loaded and sort so that month/tod combos appear together,
+    ## which minimizes the number of merges that need to happen. This step
+    ## is critical for the head/worker balance's efficiency.
+    listing = sorted(
+            list(filter(lambda l:l[0] not in loaded, listing)),
+            key=lambda l:(l[0][1],l[0][0][4:6],)
+            )
 
     batches = len(listing) // batch_size + bool(len(listing) % batch_size)
     args = [{
@@ -744,7 +759,7 @@ if __name__=="__main__":
         "replace_files":redownload,
         "delete_files":delete_after_use,
         "debug":debug,
-        "masks_to_apply":["m_valid", "m_clear", "m_vza", "m_land"],
+        "masks_to_apply":["m_land", "m_valid"],
         } for bix in range(batches)]
 
     ## use the pkl naming scheme to point to existing results if requested
@@ -776,10 +791,11 @@ if __name__=="__main__":
             ## for each of the results returned, merge the welford dict with
             ## that of previously loaded results. Unique results are identified
             ## by keys that specify the (geom, month, ToD, band) combo
+            print(f"head got rkeys: ", "\n".join(map(str,tmp_res.keys())))
             for rkey in tmp_res.keys():
                 out_path = out_dir.joinpath("_".join([lkey,*rkey])+".pkl")
                 cur = tmp_res[rkey]
-                print(rkey, f"{cur['count'].shape=}")
+                #print("result counts", rkey, np.unique(cur['count'], return_counts=True))
                 prv,new = None,None
                 ## if rkey isn't present, then either an overwrite is
                 ## requested, or no data has been loaded yet
@@ -799,6 +815,9 @@ if __name__=="__main__":
                         (prv["count"].shape, cur["count"].shape)
 
                     new = merge_welford(prv, cur)
+                    #print("merged prv",np.unique(prv["count"],return_counts=True))
+                    #print("merged cur",np.unique(cur["count"],return_counts=True))
+                    #print("merged counts",np.unique(new["count"],return_counts=True))
 
                 if debug:
                     dc0 = time.perf_counter()
@@ -813,3 +832,5 @@ if __name__=="__main__":
                 prv,cur,new,mv_prv,mv_cur,mv_both,mv_only_cur,mv_only_prv = \
                         [None]*8
                 gc.collect() ## please please
+            loaded += arg["listing"]
+            pkl.dump(loaded, acq_path.open("wb"))
