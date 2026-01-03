@@ -5,7 +5,7 @@ from pathlib import Path
 from datetime import datetime,timedelta
 from pprint import pprint
 
-from GeosGeom import GeosGeom
+from geos_geom import GeosGeom
 from plotting import plot_geo_rgb,plot_geo_scalar
 from helpers import load_welford_grids,finalize_welford,QueryResults
 

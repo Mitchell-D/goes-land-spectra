@@ -6,7 +6,7 @@ import numpy as np
 import pickle as pkl
 import warnings
 from pathlib import Path
-from netCDDF4 import Dataset
+from netCDF4 import Dataset
 
 # Without ignoring, numpy throws lots of runtime warnings due to asymptotic
 # trig values off the edge of the Earth.

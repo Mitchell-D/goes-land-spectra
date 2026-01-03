@@ -185,5 +185,3 @@ def mp_get_permutation(args):
 def mp_get_permutation_conv(args):
     return args,get_permutation_conv(**args)
 
-if __name__=="__main__":
-    from helpers import

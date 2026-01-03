@@ -12,7 +12,7 @@ from datetime import datetime,timedelta
 from netCDF4 import Dataset
 from numpy.lib.stride_tricks import as_strided
 
-from GeosGeom import GeosGeom,load_geos_geom,dump_geos_geom
+from geos_geom import GeosGeom,load_geos_geom,dump_geos_geom
 from GOESProduct import GOESProduct as GP
 from GOESProduct import valid_goes_products
 from helpers import merge_welford
