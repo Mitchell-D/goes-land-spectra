@@ -138,7 +138,7 @@ def permutations_from_configs(
                     list(perm), range(len(perm))
                     ), key=lambda v:v[0])))[1])
                 pkl_path = pkl_dir.joinpath(
-                    f"permutation_{dataset_name}_conv_{i:03}.pkl")
+                    f"permutation_{dataset_name}_fast_{i:03}.pkl")
                 pkl.dump((a, np.stack([perm,r_perm], axis=-1), stats),
                         pkl_path.open("wb"))
                 print(f"Generated {pkl_path.name}")

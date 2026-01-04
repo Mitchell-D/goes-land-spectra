@@ -131,8 +131,7 @@ perm_configs_conv = [
 
 ## "dist_threshold", "jump_cap", "shuffle_frac", "seed", "leaf_size"
 perm_configs_fast = [
-    '''
-    (.5, 3, .5, 202601041832, 32), ## basic config
+    #(.5, 3, .5, 202601041832, 32), ## basic config
 
     ## variations in both directions along each hyperparameter (except seed)
     (1., 3, .5, 202601041832, 32),
@@ -143,7 +142,6 @@ perm_configs_fast = [
     (.5, 3, 1., 202601041832, 32),
     (.5, 3, .5, 202601041832, 64),
     (.5, 3, .5, 202601041832, 16),
-    '''
 
     ## Much larger distance horizons
     (3, 3, .5, 202601041832, 32), ## basic config
@@ -277,33 +275,35 @@ def plot_perm_pkl(perm_pkl:Path, coords:np.array, subgrids:dict,
                 )
 
 if __name__=="__main__":
-    #proj_root = Path("/rhome/mdodson/goes-land-spectra/")
-    proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
+    proj_root = Path("/rhome/mdodson/goes-land-spectra/")
+    #proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
     geom_dir = proj_root.joinpath("data/domains/")
     geom_index = pkl.load(geom_dir.joinpath("index.pkl").open("rb"))
     pkl_dir = proj_root.joinpath("data/permutations")
     fig_dir = proj_root.joinpath("figures/permutations")
 
     plot_geom_nans = False
-    get_new_perms = False
+    get_new_perms = True
     plot_perms = True
 
     ## -- ( configuration for getting new permutations ) --
-    workers = 7
-    enum_start = 50000
+    workers = 10
+    enum_start = 0
     #max_iterations = 4 ## not relevant when configured
     #pool_size = 1024*32 ## not relevant in fast mode
-    kdt_workers = 2 ## only relevant for fast mode
+    kdt_workers = 4 ## only relevant for fast mode
     method = "fast"
     permute_geoms = [
-        "geom-goes-conus-0",
-        #"geom-goes-conus-1",
-        #"geom-goes-conus-2",
+        #"geom-goes-conus-0",
+        "geom-goes-conus-1",
+        "geom-goes-conus-2",
         ]
 
     ## -- ( configuration for plotting permutations ) --
     substrs = [
         "geom-goes-conus-0",
+        "geom-goes-conus-1",
+        "geom-goes-conus-2",
         ]
     test_subgrids = {
         "seus":((33.88, 36.86), (-88.1, -83.6)),
