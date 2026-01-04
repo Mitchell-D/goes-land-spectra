@@ -1,3 +1,11 @@
+"""
+
+Best fast perm for GOES E:
+
+{'dist_threshold': 0.5, 'jump_cap': 6, 'shuffle_frac': 0.5, 'leaf_size': 32,
+    'batch_size': 4096, 'return_stats': True, 'kdt_workers': 2}
+
+"""
 import numpy as np
 import pickle as pkl
 import time
@@ -311,7 +319,7 @@ if __name__=="__main__":
     proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
     geom_dir = proj_root.joinpath("data/domains/")
     geom_index = pkl.load(geom_dir.joinpath("index.pkl").open("rb"))
-    pkl_dir = proj_root.joinpath("data/permutations")
+    pkl_dir = proj_root.joinpath("data/permutations/test")
     fig_dir = proj_root.joinpath("figures/permutations")
 
     plot_geom_nans = False
@@ -335,9 +343,9 @@ if __name__=="__main__":
 
     ## -- ( configuration for plotting permutations ) --
     substrs = [
-        "geom-goes-conus-0",
-        #"geom-goes-conus-1",
-        #"geom-goes-conus-2",
+        #"geom-goes-conus-0",
+        "geom-goes-conus-1",
+        "geom-goes-conus-2",
         ]
     test_subgrids = {
         "seus":((33.88, 36.86), (-88.1, -83.6)),
@@ -354,7 +362,7 @@ if __name__=="__main__":
     ## treat different geometric views independently regardless of task
     for view_key,vdict in geom_index.items():
         geom_path = geom_dir.joinpath(Path(vdict["path"]).name)
-        if not geom_path.stem in permute_geoms:
+        if not geom_path.stem in permute_geoms + substrs:
             continue
         data_shapes = vdict["shapes"]
         domain_shape = sorted(data_shapes, key=lambda t:t[0]*t[1])[0]
