@@ -131,6 +131,7 @@ perm_configs_conv = [
 
 ## "dist_threshold", "jump_cap", "shuffle_frac", "seed", "leaf_size"
 perm_configs_fast = [
+    '''
     (.5, 3, .5, 202601041832, 32), ## basic config
 
     ## variations in both directions along each hyperparameter (except seed)
@@ -142,6 +143,19 @@ perm_configs_fast = [
     (.5, 3, 1., 202601041832, 32),
     (.5, 3, .5, 202601041832, 64),
     (.5, 3, .5, 202601041832, 16),
+    '''
+
+    ## Much larger distance horizons
+    (3, 3, .5, 202601041832, 32), ## basic config
+
+    (5., 3, .5, 202601041832, 32),
+    (1., 3, .5, 202601041832, 32),
+    (3., 6, .5, 202601041832, 32),
+    (3., 2, .5, 202601041832, 32),
+    (3., 3, .1, 202601041832, 32),
+    (3., 3, 1., 202601041832, 32),
+    (3., 3, .5, 202601041832, 64),
+    (3., 3, .5, 202601041832, 16),
     ]
 
 def plot_perm_pkl(perm_pkl:Path, coords:np.array, subgrids:dict,
@@ -263,65 +277,47 @@ def plot_perm_pkl(perm_pkl:Path, coords:np.array, subgrids:dict,
                 )
 
 if __name__=="__main__":
-    proj_root = Path("/rhome/mdodson/goes-land-spectra/")
-    #proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
+    #proj_root = Path("/rhome/mdodson/goes-land-spectra/")
+    proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
     geom_dir = proj_root.joinpath("data/domains/")
     geom_index = pkl.load(geom_dir.joinpath("index.pkl").open("rb"))
     pkl_dir = proj_root.joinpath("data/permutations")
     fig_dir = proj_root.joinpath("figures/permutations")
 
+    plot_geom_nans = False
+    get_new_perms = False
+    plot_perms = True
+
+    ## -- ( configuration for getting new permutations ) --
+    workers = 7
+    enum_start = 50000
+    #max_iterations = 4 ## not relevant when configured
+    #pool_size = 1024*32 ## not relevant in fast mode
+    kdt_workers = 2 ## only relevant for fast mode
+    method = "fast"
     permute_geoms = [
         "geom-goes-conus-0",
         #"geom-goes-conus-1",
         #"geom-goes-conus-2",
         ]
 
-    ## sanity check plot nans in geometry matrix
-    '''
-    print(np.unique(m_domain[~m_nans]))
-    from plotting import plot_geo_tiles
-    plot_geo_tiles(
-        data=m_domain[~m_nans].astype(int),
-        lat=gg.lats[~m_nans],
-        lon=gg.lons[~m_nans],
-        plot_spec={
-            #"proj_out":"plate_carree",
-            "proj_out":"geostationary",
-            "proj_out_args":{
-                "central_longitude":gg.longitude_of_projection_origin,
-                "satellite_height":gg.perspective_point_height,
-                },
-            "cmap":"magma",
-            "cbar_orient":"horizontal",
-            "cartopy_feats":["states", "borders"],
-            },
-        show=True,
-        )
-    from plotting import plot_geo_ints
-    ## 0 if OOB, 1 if IB & valid coords, 2 if IB & invalid coords
-    nan_map = np.where(
-            m_domain,
-            np.where(m_domain&np.any(np.isnan(gg.latlon),axis=-1), 2, 1),
-            0
-            )
-    plot_geo_ints(
-        #int_data=nan_map,
-        int_data=m_valid_2d.astype(int),
-        lat=gg.lats[m_domain],
-        lon=gg.lons[m_domain],
-        cbar_ticks=True,
-        latlon_ticks=False,
-        #colors=["white", "blue", "red"],
-        colors=["white", "blue"],
-        show=True,
-        )
-    '''
-    workers = 7
-    enum_start = 40000
-    #max_iterations = 4 ## not relevant when configured
-    #pool_size = 1024*32 ## not relevant in fast mode
-    kdt_workers = 2 ## only relevant for fast mode
+    ## -- ( configuration for plotting permutations ) --
+    substrs = [
+        "geom-goes-conus-0",
+        ]
+    test_subgrids = {
+        "seus":((33.88, 36.86), (-88.1, -83.6)),
+        "michigan":((41.59, 45.94), (-88.28, -81.9)),
+        "colorado":((36.99, 40.96), (-109.1, -102.05)),
+        "etx":((28.97, 33.39), (-98.67, -93.28)),
+        "ne":((43.0, 47.23), (-79.34, -67.99)),
+        "nw":((42.00, 48.96), (-122.74, -118.24)),
+        "cplains":((39.32, 41.69), (-96.88, -92.78)),
+        "hplains":((43.73, 48.33), (-104.01, -96.08)),
+        }
+    chunk_size = 64
 
+    ## treat different geometric views independently regardless of task
     for view_key,vdict in geom_index.items():
         geom_path = geom_dir.joinpath(Path(vdict["path"]).name)
         if not geom_path.stem in permute_geoms:
@@ -339,115 +335,128 @@ if __name__=="__main__":
             gg.lats[m_valid],
             gg.lons[m_valid],
             ], axis=1)
-        '''
-        permutations_from_configs(
-            dataset_name=Path(vdict["path"]).stem,
-            latlon=latlon,
-            configs=perm_configs_global,
-            mode="global",
-            pkl_dir=pkl_dir,
-            seed=200007221750,
-            max_iterations=64,
-            enum_start=0,
-            return_stats=True,
-            debug=True,
-            )
-        '''
-        '''
-        permutations_from_configs(
-            dataset_name=Path(vdict["path"]).stem,
-            coords=latlon,
-            configs=perm_configs_conv[1::2],
-            mode="conv",
-            pkl_dir=pkl_dir,
-            #7seed=200007221750,
-            seed=7221751,
-            max_iterations=max_iterations,
-            enum_start=enum_start,
-            pool_size=pool_size,
-            return_stats=True,
-            nworkers=workers,
-            debug=True,
-            )
-        '''
-
-        ## configs provide:
-        ## ["dist_threshold", "jump_cap", "shuffle_frac", "seed", "leaf_size"]
-        ## to permutation.get_permutation_fast()
-        permutations_from_configs(
-            dataset_name=Path(vdict["path"]).stem,
-            coords=latlon,
-            configs=perm_configs_fast,
-            pkl_dir=pkl_dir,
-            mode="fast",
-            enum_start=enum_start,
-            #seed=14750185, ## handled by config
-            #max_iterations=4, ## handled by config (jump_cap)
-            #pool_size=pool_size, ## not relevant for fast mode
-            kdt_workers=kdt_workers,
-            return_stats=True,
-            nworkers=workers,
-            debug=True,
-            )
 
 
-    #exit(0)
+        ## sanity check plot nans in geometry matrix
+        if plot_geom_nans:
+            print(np.unique(m_domain[~m_nans]))
+            from plotting import plot_geo_tiles,plot_geo_ints
+            plot_geo_tiles(
+                data=m_domain[~m_nans].astype(int),
+                lat=gg.lats[~m_nans],
+                lon=gg.lons[~m_nans],
+                plot_spec={
+                    #"proj_out":"plate_carree",
+                    "proj_out":"geostationary",
+                    "proj_out_args":{
+                        "central_longitude":gg.longitude_of_projection_origin,
+                        "satellite_height":gg.perspective_point_height,
+                        },
+                    "cmap":"magma",
+                    "cbar_orient":"horizontal",
+                    "cartopy_feats":["states", "borders"],
+                    },
+                show=True,
+                )
+            ## 0 if OOB, 1 if IB & valid coords, 2 if IB & invalid coords
+            nan_map = np.where(
+                m_domain,
+                np.where(m_domain&np.any(np.isnan(gg.latlon),axis=-1),2,1),
+                0
+                )
+            plot_geo_ints(
+                #int_data=nan_map,
+                int_data=m_valid_2d.astype(int),
+                lat=gg.lats[m_domain],
+                lon=gg.lons[m_domain],
+                cbar_ticks=True,
+                latlon_ticks=False,
+                #colors=["white", "blue", "red"],
+                colors=["white", "blue"],
+                show=True,
+                )
 
-    ## Check how many chunks it would take to extract certain subgrids
-    '''
-    substrs = [
-            #"026", ##  669  852 1042  806  |  9.03  4.26
-            #"046", ##  528  661  800  572  |  6.75  3.09
-            #"047", ##  453  575  685  489  |  5.92  3.43
-            #"012", ##  322  417  473  377  |  4.29  3.19
-            #"005", ##  310  415  453  372  |  4.16  3.28
-            #"019", ##  311  415  462  368  |  4.15  3.27
-            #"064",
-            #"066",
-            #"067",
-            #"068",
-            #f"{v:03}" for v in range(219,264),
-            "nldas2",
-            ]
-
-    test_subgrids = {
-            "seus":((33.88, 36.86), (-88.1, -83.6)),
-            "michigan":((41.59, 45.94), (-88.28, -81.9)),
-            "colorado":((36.99, 40.96), (-109.1, -102.05)),
-            "etx":((28.97, 33.39), (-98.67, -93.28)),
-            "ne":((43.0, 47.23), (-79.34, -67.99)),
-            "nw":((42.00, 48.96), (-122.74, -118.24)),
-            "cplains":((39.32, 41.69), (-96.88, -92.78)),
-            "hplains":((43.73, 48.33), (-104.01, -96.08)),
-            }
-    chunk_size = 64
-    print_pkls = [p for p in pkl_dir.iterdir()
-            if any(s in p.name for s in substrs)]
-    #print(np.amin(latlon, axis=0), np.amax(latlon, axis=0))
-    for pf in print_pkls:
-        pnum = int(pf.stem.split("_")[-1])
-        #mask = m_valid if pnum>=75 else m_valid_base ## for era5
-        mask = m_valid
-        coords = np.stack([
-            sdata[slabels.index("lat")][mask],
-            sdata[slabels.index("lon")][mask],
-            ], axis=1)
-        try:
-            plot_perm_pkl(
-                    perm_pkl=pf,
-                    coords=coords,
-                    subgrids=test_subgrids,
-                    valid_mask=mask,
-                    fig_dir=fig_dir,
-                    chunk_size=64,
-                    plot_stats=True,
-                    plot_sparse_chunks=True,
-                    num_sparse_chunks=50,
+        ## extract permutations
+        if get_new_perms:
+            if method == "global":
+                permutations_from_configs(
+                    dataset_name=Path(vdict["path"]).stem,
+                    latlon=latlon,
+                    configs=perm_configs_global,
+                    mode="global",
+                    pkl_dir=pkl_dir,
                     seed=200007221750,
+                    max_iterations=64,
+                    enum_start=0,
+                    return_stats=True,
                     debug=True,
                     )
-        except Exception as e:
-            print(f"Failed for {pf.name}")
-            #print(e)
-            raise e
-    '''
+
+            if method == "conv":
+                permutations_from_configs(
+                    dataset_name=Path(vdict["path"]).stem,
+                    coords=latlon,
+                    configs=perm_configs_conv[1::2],
+                    mode="conv",
+                    pkl_dir=pkl_dir,
+                    #7seed=200007221750,
+                    seed=7221751,
+                    max_iterations=max_iterations,
+                    enum_start=enum_start,
+                    pool_size=pool_size,
+                    return_stats=True,
+                    nworkers=workers,
+                    debug=True,
+                    )
+
+            if method == "fast":
+                ## configs provide:
+                ## ["dist_threshold","jump_cap","shuffle_frac","seed","leaf_size"]
+                ## to permutation.get_permutation_fast()
+                permutations_from_configs(
+                    dataset_name=Path(vdict["path"]).stem,
+                    coords=latlon,
+                    configs=perm_configs_fast,
+                    pkl_dir=pkl_dir,
+                    mode="fast",
+                    enum_start=enum_start,
+                    #seed=14750185, ## handled by config
+                    #max_iterations=4, ## handled by config (jump_cap)
+                    #pool_size=pool_size, ## not relevant for fast mode
+                    kdt_workers=kdt_workers,
+                    return_stats=True,
+                    nworkers=workers,
+                    debug=True,
+                    )
+
+
+
+        ## Check how many chunks it would take to extract certain subgrids
+
+        if plot_perms:
+            print_pkls = [p for p in pkl_dir.iterdir()
+                    if any(s in p.name for s in substrs)]
+            #print(np.amin(latlon, axis=0), np.amax(latlon, axis=0))
+            for pf in print_pkls:
+                pnum = int(pf.stem.split("_")[-1])
+                #mask = m_valid if pnum>=75 else m_valid_base ## for era5
+                mask = m_valid
+                try:
+                    plot_perm_pkl(
+                            perm_pkl=pf,
+                            coords=latlon,
+                            subgrids=test_subgrids,
+                            valid_mask=mask,
+                            fig_dir=fig_dir,
+                            chunk_size=64,
+                            plot_stats=True,
+                            plot_sparse_chunks=True,
+                            num_sparse_chunks=50,
+                            seed=200007221750,
+                            debug=True,
+                            )
+                except Exception as e:
+                    print(f"Failed for {pf.name}")
+                    print(e)
+                    #raise e
+            #'''
