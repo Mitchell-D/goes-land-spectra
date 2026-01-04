@@ -490,19 +490,22 @@ if __name__=="__main__":
     ## start and end day for data listing
     #sday,eday,gver = datetime(2018,1,1),datetime(2022,12,31) ## test period
 
-    #sday,eday,gver = datetime(2017,7,1),datetime(2024,6,30),16 ## 7y 16E
-    sday,eday,gver = datetime(2019,1,1),datetime(2021,12,31),17 ## 3y 17W
+    sday,eday,gver = datetime(2017,7,1),datetime(2024,6,30),16 ## 7y 16E
+    #sday,eday,gver = datetime(2019,1,1),datetime(2021,12,31),17 ## 3y 17W
     #sday,eday,gver = datetime(2022,7,1),datetime(2025,6,30),18 ## 3y 18W
     #sday,eday,gver = datetime(2024,10,15),datetime(2025,3,15),19 ## <1y 19C
 
     ## L1b radiance bands to acquire
-    l1b_bands = [1,2,3,5,6,7,13,15]
+    #l1b_bands = [1,2,3,5,6,7,13,15]
+    l1b_bands = [13,15]
 
     ## UTC hours of the day to capture shortwave and longwave radiances
-    swtimes = [timedelta(hours=t) for t in [12,15,18,21,0]]
+    #swtimes = [timedelta(hours=t) for t in [12,15,18,21,0]]
     #swtimes = [timedelta(hours=t) for t in [15,18,21]]
     #lwtimes = [timedelta(hours=t) for t in [12,15,18,21,0,3,6,9]]
-    lwtimes = swtimes ## for now, no night pixels. need night-specific masking
+    #lwtimes = swtimes ## for now, no night pixels. need night-specific masking
+    swtimes = []
+    swtimes,lwtimes = [],[timedelta(hours=t) for t in [3,6,9]]
 
     ## maximum error in closest file time before timestep is invalidated
     dt_thresh_mins = 5
@@ -530,7 +533,7 @@ if __name__=="__main__":
     ## identifying name of this dataset for the listing pkl
     listing_name = f"goes{gver}_clearland-l1b-c0" ## lmask&l1b combo 0
 
-    new_listing = False
+    new_listing = True
     debug = True
     redownload = False
     delete_after_use = False ## look into storing compressed in-domain arrays
@@ -654,7 +657,7 @@ if __name__=="__main__":
             for rkey in tmp_res.keys():
                 out_path = out_dir.joinpath("_".join([lkey,*rkey])+".pkl")
                 cur = tmp_res[rkey]
-:               prv,new = None,None
+                prv,new = None,None
                 ## if rkey isn't present, then either an overwrite is
                 ## requested, or no data has been loaded yet
                 if rkey not in results.keys():

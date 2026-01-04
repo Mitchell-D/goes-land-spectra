@@ -10,9 +10,11 @@ from geos_geom import load_geos_geom
 from permutation import permutations_from_configs
 from plotting import plot_multiy_lines, plot_geo_rgb_basic
 
+'''
 config_labels = ["target_avg_dist", "roll_threshold", "threshold_diminish",
         "recycle_count", "seed", "dynamic_roll_threshold"]
 config_labels_conv = ["dist_threshold", "reperm_cap", "shuffle_frac", "seed"]
+'''
 perm_configs_global = [
         (2, .5, .01, 10, 20007221750, False),
         (2, .5, .01, 50, 20000221750, False),
@@ -36,20 +38,65 @@ perm_configs_global = [
         ]
 
 perm_configs_conv = [
-        (.5, 4, .1, 57927859614),
-        (.5, 8, .1, 57927859614),
-        (.5, 16, .1, 57927859614),
-        (.5, 32, .1, 57927859614),
-        (.5, 4, .1, 57927859614),
-        (.5, 8, .1, 57927859614),
-        (.5, 16, .1, 57927859614),
-        (.5, 32, .1, 57927859614),
-        (.5, 4, .25, 57927859614),
-        (.5, 16, .25, 57927859614),
-        (.5, 32, .25, 57927859614),
-        (.5, 4, .5, 57927859614),
-        (.5, 16, .5, 57927859614),
-        (.5, 32, .5, 57927859614),
+        (.5, 4, 1., 57927859614),
+        (.5, 8, 1., 57927859614),
+        (.5, 16, 1., 57927859614),
+        (.5, 32, 1., 57927859614),
+        (.5, 4, 1., 57927859614),
+        (.5, 8, 1., 57927859614),
+        (.5, 16, 1., 57927859614),
+        (.5, 32, 1., 57927859614),
+        (.5, 4, 1., 57927859614),
+        (.5, 16, 1., 57927859614),
+        (.5, 32, 1., 57927859614),
+        (.5, 4, 1., 57927859614),
+        (.5, 16, 1., 57927859614),
+        (.5, 32, 1., 57927859614),
+
+        (1, 4, 1., 57927859614),
+        (1, 8, 1., 57927859614),
+        (1, 16, 1., 57927859614),
+        (1, 32, 1., 57927859614),
+        (1, 4, 1., 57927859614),
+        (1, 8, 1., 57927859614),
+        (1, 16, 1., 57927859614),
+        (1, 32, 1., 57927859614),
+        (1, 4, 1., 57927859614),
+        (1, 16, 1., 57927859614),
+        (1, 32, 1., 57927859614),
+        (1, 4, 1., 57927859614),
+        (1, 16, 1., 57927859614),
+        (1, 32, 1., 57927859614),
+
+        (1.5, 4, 1., 57927859614),
+        (1.5, 8, 1., 57927859614),
+        (1.5, 16, 1., 57927859614),
+        (1.5, 32, 1., 57927859614),
+        (1.5, 4, 1., 57927859614),
+        (1.5, 8, 1., 57927859614),
+        (1.5, 16, 1., 57927859614),
+        (1.5, 32, 1., 57927859614),
+        (1.5, 4, 1., 57927859614),
+        (1.5, 16, 1., 57927859614),
+        (1.5, 32, 1., 57927859614),
+        (1.5, 4, 1., 57927859614),
+        (1.5, 16, 1., 57927859614),
+        (1.5, 32, 1., 57927859614),
+
+        (.5, 4, 1., 57927859614),
+        (.5, 8, 1., 57927859614),
+        (.5, 16, 1., 57927859614),
+        (.5, 32, 1., 57927859614),
+        (.5, 4, 1., 57927859614),
+        (.5, 8, 1., 57927859614),
+        (.5, 16, 1., 57927859614),
+        (.5, 32, 1., 57927859614),
+        (.5, 4, 1., 57927859614),
+        (.5, 16, 1., 57927859614),
+        (.5, 32, 1., 57927859614),
+        (.5, 4, 1., 57927859614),
+        (.5, 16, 1., 57927859614),
+        (.5, 32, 1., 57927859614),
 
         (1, 4, .1, 57927859614),
         (1, 8, .1, 57927859614),
@@ -81,6 +128,21 @@ perm_configs_conv = [
         (1.5, 16, .5, 57927859614),
         (1.5, 32, .5, 57927859614),
         ]
+
+## "dist_threshold", "jump_cap", "shuffle_frac", "seed", "leaf_size"
+perm_configs_fast = [
+    (.5, 3, .5, 202601041832, 32), ## basic config
+
+    ## variations in both directions along each hyperparameter (except seed)
+    (1., 3, .5, 202601041832, 32),
+    (.25, 3, .5, 202601041832, 32),
+    (.5, 6, .5, 202601041832, 32),
+    (.5, 2, .5, 202601041832, 32),
+    (.5, 3, .1, 202601041832, 32),
+    (.5, 3, 1., 202601041832, 32),
+    (.5, 3, .5, 202601041832, 64),
+    (.5, 3, .5, 202601041832, 16),
+    ]
 
 def plot_perm_pkl(perm_pkl:Path, coords:np.array, subgrids:dict,
         valid_mask:np.array, fig_dir:Path, chunk_size=64, plot_stats=False,
@@ -201,8 +263,8 @@ def plot_perm_pkl(perm_pkl:Path, coords:np.array, subgrids:dict,
                 )
 
 if __name__=="__main__":
-    #proj_root = Path("/rhome/mdodson/goes-land-spectra/")
-    proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
+    proj_root = Path("/rhome/mdodson/goes-land-spectra/")
+    #proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
     geom_dir = proj_root.joinpath("data/domains/")
     geom_index = pkl.load(geom_dir.joinpath("index.pkl").open("rb"))
     pkl_dir = proj_root.joinpath("data/permutations")
@@ -210,6 +272,8 @@ if __name__=="__main__":
 
     permute_geoms = [
         "geom-goes-conus-0",
+        #"geom-goes-conus-1",
+        #"geom-goes-conus-2",
         ]
 
     ## sanity check plot nans in geometry matrix
@@ -252,9 +316,11 @@ if __name__=="__main__":
         show=True,
         )
     '''
-    workers = 20
-    enum_start = 0
-    max_iterations = 40
+    workers = 7
+    enum_start = 40000
+    #max_iterations = 4 ## not relevant when configured
+    #pool_size = 1024*32 ## not relevant in fast mode
+    kdt_workers = 2 ## only relevant for fast mode
 
     for view_key,vdict in geom_index.items():
         geom_path = geom_dir.joinpath(Path(vdict["path"]).name)
@@ -287,15 +353,38 @@ if __name__=="__main__":
             debug=True,
             )
         '''
+        '''
         permutations_from_configs(
             dataset_name=Path(vdict["path"]).stem,
             coords=latlon,
-            configs=perm_configs_conv,
+            configs=perm_configs_conv[1::2],
             mode="conv",
             pkl_dir=pkl_dir,
-            seed=200007221750,
+            #7seed=200007221750,
+            seed=7221751,
             max_iterations=max_iterations,
             enum_start=enum_start,
+            pool_size=pool_size,
+            return_stats=True,
+            nworkers=workers,
+            debug=True,
+            )
+        '''
+
+        ## configs provide:
+        ## ["dist_threshold", "jump_cap", "shuffle_frac", "seed", "leaf_size"]
+        ## to permutation.get_permutation_fast()
+        permutations_from_configs(
+            dataset_name=Path(vdict["path"]).stem,
+            coords=latlon,
+            configs=perm_configs_fast,
+            pkl_dir=pkl_dir,
+            mode="fast",
+            enum_start=enum_start,
+            #seed=14750185, ## handled by config
+            #max_iterations=4, ## handled by config (jump_cap)
+            #pool_size=pool_size, ## not relevant for fast mode
+            kdt_workers=kdt_workers,
             return_stats=True,
             nworkers=workers,
             debug=True,

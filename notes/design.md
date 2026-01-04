@@ -1,5 +1,7 @@
 # project design notes
 
+## better file storage concept
+
 Currently, dumping results into the pkls is convenient since a single
 (sat, listing, t0, tf, geom, month, tod, band) combo is easy to pull
 and update. Ultimately, though, most of the research analysis
@@ -22,6 +24,8 @@ geom -> (Yr,Xr,2) scan angles at each res r, proj metadata
 m\_domain -> (Yr,Xr) boolean mask of valid domain
 
 results -> (pixel, month, tod, band, metric) array
+
+## file sizes
 
 The results array should be chunked to allow efficient access.
 Currently a single (sat, listing, t0, tf, geom) combination,
@@ -52,6 +56,8 @@ I got these estimates using commands like:
 ll -d data/results/* | grep goes16 | grep geom-goes-conus-0 | grep _0_  | grep -e C01 -e C05 -e C03 | cut -c 46-  | xargs du -bc
 ```
 
+## spatial chunking and geometric assumptions
+
 One challenge is that good spatial chunking is hard when the pixels
 are stored in 1d, however the localized permutations I developed for
 my emulator work (ie [emulate-era5-land.helpers.get\_permutation][1])
@@ -77,8 +83,137 @@ system works...
 3. The land mask extracted for a geometry using the very first LST
    product is representative of all other arrays with matching geoms.
 
+## clustering of final feature datta.
 
+Once the data is easy to access across space and dimensional combos,
+it will be interesting to dimensionally reduce it and see what
+clusters emerge.
 
-float32 chunks of (1024, 3, 3, 3)
+I'm considering masked autoencoder approaches that can take the
+(P,F) where num feats F == months\*tods\*bands\*metrics + static.
 
-Consider adding a vza threshold, conus-only mask, etc to save space.
+chatgpt suggests that modeling the full conditional of every feature
+may waste capacity on hard-to-predict features. contrastive learning
+models are less succeptible to this.
+
+Option A (very strong, simple):
+
+1. Standardize features
+2. PCA -> 200 dims
+3. Denoising autoencoder
+4. Latent dim: 32–128
+
+Option B (often best):
+
+1. Standardize
+2. PCA -> 200 dims
+3. Contrastive encoder with feature masking
+4. Latent dim: 64
+
+Option C (if no PCA):
+
+1. Deep residual MLP encoder
+2. Masked / denoising objective
+3. Large batches
+
+the goal here is to get a latent representation that robustly
+captures the correlation structure of similar pixels by preserving
+adjacency with the high-dimensional input.
+
+If you want to go further:
+
+- Replace MSE with Huber loss
+- Add contrastive loss on z
+- Train with multiple masked views
+- Enforce latent decorrelation (VICReg-style)
+
+contrastive models are related to energy-based models
+
+## why does contrastive learning work? (Phillip Isola)
+
+want to infer the *common cause* from co-ocurring samples.
+
+contrastive loss is a lower bound on mutual information of embeddings
+
+embeddings are deterministic functions of samples
+
+so contrastive loss minimization maximizes mutual information
+between samples.
+
+In practice, this consists of masking a random subset of both
+arrays, and rewarding both the reconstruction loss of the sample
+as well as the proximity of the learned latent embedding.
+
+Authors mathematically show that there is a sweet spot in the mutual
+information between two unmasked "views" of a sample that containing
+the best representation.
+
+Even if the downstream task requiring semantic embeddings is not
+known, a task generally requires an unknown number of bits of
+mutual information in order to be sufficiently represented.
+Views that share approximately this amount of mutual information.
+
+The representation should be **minimal and sufficient**
+
+From *Understanding Contrastive Representation Learning through
+Alighnment and Uniformity on the Hypersphere*, (Wang & Isola, 2020)
+define metrics for alignment and uniformity.
+
+**alignment**: expected true pair feature distance. Measures distance
+between embeddings.
+
+**uniformity**: log expected gaussian potential of data pair. In
+other words, the expected alignment between those embeddings.
+Minimized when embeddings map to a gaussian distribution.
+
+Mutually minimizing uniformally and maximizing alignment encourages
+a semantically rich and gaussian-approximate latent embedding space.
+
+Paper shows examples where pareto front between the two metrics
+
+## supervised contrastive learning (yannic kilcher)
+
+Traditionally, supervised cross-entropy uses one-hot encodings
+and thus only rewards correct predictions discretely. Due to softmax
+normalization to a probability distribution, other feature
+probabilities get proportionally "pushed down" as optimization
+proceeds, but only as a consequence of only explicitly optimizing one
+output parameter at a time.
+
+Contrastive learning can be used to learn semantically rich data
+representations first so that downstream tasks become easier.
+This is because semantically similar classes are nearby given
+contrastive-learned embeddings.
+
+Then, a small classifier is trained on top of the embeddings
+using normal cross-entropy loss.
+
+## umap background info
+
+UMAP may be the best way to dimensionally reduce the combinations.
+
+Nerve theorem implies that the data shape can be approximated by
+connecting 1 & 2 simpleces within a radius. However, high-dimensional
+data tends to have some very dense and some very sparse areas.
+
+Instead, UMAP uses a variable radius determined by the definition
+of a reimannian metric on the data manifold.
+
+Density is considered high when the k'th nearest neighbor is close,
+and far when the k'th nearest neighbor is far away. The k you use
+is a parameter that favors global structure if big, or local
+structure is small. No good general heuristic.
+
+Typically, clustering either involves factorizing the data matrix, or
+building a weighted network graph of the data.
+
+For UMAP, assume the data is uniformly distributed on the manifold,
+and define a riemannian metric that makes that assumption true.
+
+## categorical deep learning (ML Street Talk youtube)
+
+LLMs cannot intuit spatial, algorithmic, or algebraic reasoning
+using only language. Doing so in general is thought to require
+more structured and unique algebraic structures learned through
+category theory.
+
