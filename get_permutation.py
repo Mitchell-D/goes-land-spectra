@@ -8,7 +8,8 @@ from multiprocessing import Pool
 
 from geos_geom import load_geos_geom
 from permutation import permutations_from_configs
-from plotting import plot_multiy_lines, plot_geo_rgb_basic
+from plotting import plot_multiy_lines,plot_rgb_geos_on_plate
+from plotting import plot_geostationary
 
 '''
 config_labels = ["target_avg_dist", "roll_threshold", "threshold_diminish",
@@ -156,9 +157,11 @@ perm_configs_fast = [
     (3., 3, .5, 202601041832, 16),
     ]
 
-def plot_perm_pkl(perm_pkl:Path, coords:np.array, subgrids:dict,
-        valid_mask:np.array, fig_dir:Path, chunk_size=64, plot_stats=False,
-        plot_sparse_chunks=True, num_sparse_chunks=50, seed=None, debug=False):
+def plot_perm_pkl(
+        perm_pkl:Path, coords:np.array, subgrids:dict, geom,
+        valid_mask:np.array, fig_dir:Path, show=False, chunk_size=64,
+        plot_stats=False, plot_sparse_chunks=True, num_sparse_chunks=50,
+        seed=None, debug=False):
     """
     :@param perm_pkl:
     :@param coords:
@@ -180,8 +183,11 @@ def plot_perm_pkl(perm_pkl:Path, coords:np.array, subgrids:dict,
     check_valid[perm[:,0]] = True
     assert np.all(check_valid), f"{perm_pkl.name} not a valid permutation!"
 
-    if debug:
-        pprint({k:v for k,v in args.items() if k!="coord_array"})
+    print(f"\n{perm_pkl.stem}")
+    print({k:v for k,v in args.items()
+           if k not in ["coords", "seed", "batches_per_stat"]})
+    print(f"dist avg: {stats[-1][0]:.2f} stddev: {stats[-1][1]:.2f}")
+
 
     ## (N,2) latlon array after permutation
     ll_perm = coords[perm[...,0]]
@@ -214,18 +220,31 @@ def plot_perm_pkl(perm_pkl:Path, coords:np.array, subgrids:dict,
         rgb[sub_ixs_noperm[:,0],sub_ixs_noperm[:,1]] = np.array([0,0,255])
         rgb[sub_ixs_perm[:,0],sub_ixs_perm[:,1]] = np.array([255,0,0])
 
-        plot_geo_rgb_basic(
-                rgb=rgb,
-                lat_range=(np.amin(coords[:,0]),np.amax(coords[:,0])),
-                lon_range=(np.amin(coords[:,1]),np.amax(coords[:,1])),
-                plot_spec={
-                    "border_color":"black",
-                    "border_linewidth":1,
-                    "title":f"{perm_pkl.stem} ({rlabel})"
+        ## must convert to meters wrt NADIR
+        extent = [
+            np.amin(geom.e_w_scan_angles)*gg.perspective_point_height,
+            np.amax(geom.e_w_scan_angles)*gg.perspective_point_height,
+            np.amin(geom.n_s_scan_angles)*gg.perspective_point_height,
+            np.amax(geom.n_s_scan_angles)*gg.perspective_point_height,
+            ]
+        #'''
+        plot_geostationary(
+            data=rgb,
+            sat_lon=gg.longitude_of_projection_origin,
+            sat_height=gg.perspective_point_height,
+            sat_sweep=gg.sweep_angle_axis,
+            plot_spec={
+                "projection":{
+                    "type":"geostationary",
                     },
-                fig_path=fig_dir.joinpath(f"{perm_pkl.stem}_{rlabel}.png"),
-                show=False
-                )
+                "title":f"{perm_pkl.stem} ({rlabel})",
+                "extent":extent,
+                },
+            fig_path=fig_dir.joinpath(f"{perm_pkl.stem}_{rlabel}.png"),
+            show=show,
+            debug=debug,
+            )
+        #'''
 
     if plot_sparse_chunks:
         rng = np.random.default_rng(seed)
@@ -242,19 +261,32 @@ def plot_perm_pkl(perm_pkl:Path, coords:np.array, subgrids:dict,
         sub_ixs_perm = valid_idxs[in_subset]
         rgb[sub_ixs_noperm[:,0],sub_ixs_noperm[:,1]] = np.array([255,0,0])
         rgb[sub_ixs_perm[:,0],sub_ixs_perm[:,1]] = np.array([0,0,255])
-        plot_geo_rgb_basic(
-                rgb=rgb,
-                lat_range=(np.amin(coords[:,0]),np.amax(coords[:,0])),
-                lon_range=(np.amin(coords[:,1]),np.amax(coords[:,1])),
-                plot_spec={
-                    "border_color":"black",
-                    "border_linewidth":1,
-                    "title":f"{perm_pkl.stem} " + \
-                            f"({num_sparse_chunks} x {chunk_size})"
+
+        ## must convert to meters wrt NADIR
+        extent = [
+            np.amin(geom.e_w_scan_angles)*gg.perspective_point_height,
+            np.amax(geom.e_w_scan_angles)*gg.perspective_point_height,
+            np.amin(geom.n_s_scan_angles)*gg.perspective_point_height,
+            np.amax(geom.n_s_scan_angles)*gg.perspective_point_height,
+            ]
+
+        #'''
+        plot_geostationary(
+            data=rgb,
+            sat_lon=gg.longitude_of_projection_origin,
+            sat_height=gg.perspective_point_height,
+            sat_sweep=gg.sweep_angle_axis,
+            plot_spec={
+                "projection":{
+                    "type":"geostationary",
                     },
-                fig_path=fig_dir.joinpath(f"{perm_pkl.stem}_chunked.png"),
-                show=False
-                )
+                "title":f"{perm_pkl.stem} ({rlabel})",
+                "extent":extent,
+                },
+            fig_path=fig_dir.joinpath(f"{perm_pkl.stem}_chunked.png"),
+            show=show,
+            debug=debug,
+            )
 
     mean_px_per_chunk = np.average(px_per_chunk)
     print(f"{perm_pkl.stem}, {mean_px_per_chunk = :.4f}")
@@ -266,25 +298,27 @@ def plot_perm_pkl(perm_pkl:Path, coords:np.array, subgrids:dict,
                 plot_spec={
                     "x_label":"Iterations",
                     "y_labels":["Avg. Dist", "Stdev. Dist"],
-                    "y_ranges":[(0,15),(0,15)],
+                    "y_ranges":[(0,4),(0,4)],
                     "title":f"{perm_pkl.stem} {mean_px_per_chunk=:.3f}",
                     "spine_increment":.1,
                     },
-                show=False,
+                show=show,
                 fig_path=fig_dir.joinpath(f"{perm_pkl.stem}_stats.png")
                 )
 
 if __name__=="__main__":
-    proj_root = Path("/rhome/mdodson/goes-land-spectra/")
-    #proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
+    #proj_root = Path("/rhome/mdodson/goes-land-spectra/")
+    proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
     geom_dir = proj_root.joinpath("data/domains/")
     geom_index = pkl.load(geom_dir.joinpath("index.pkl").open("rb"))
     pkl_dir = proj_root.joinpath("data/permutations")
     fig_dir = proj_root.joinpath("figures/permutations")
 
     plot_geom_nans = False
-    get_new_perms = True
+    get_new_perms = False
     plot_perms = True
+    show = False
+    debug = False
 
     ## -- ( configuration for getting new permutations ) --
     workers = 10
@@ -294,16 +328,16 @@ if __name__=="__main__":
     kdt_workers = 4 ## only relevant for fast mode
     method = "fast"
     permute_geoms = [
-        #"geom-goes-conus-0",
-        "geom-goes-conus-1",
-        "geom-goes-conus-2",
+        "geom-goes-conus-0",
+        #"geom-goes-conus-1",
+        #"geom-goes-conus-2",
         ]
 
     ## -- ( configuration for plotting permutations ) --
     substrs = [
         "geom-goes-conus-0",
-        "geom-goes-conus-1",
-        "geom-goes-conus-2",
+        #"geom-goes-conus-1",
+        #"geom-goes-conus-2",
         ]
     test_subgrids = {
         "seus":((33.88, 36.86), (-88.1, -83.6)),
@@ -315,7 +349,7 @@ if __name__=="__main__":
         "cplains":((39.32, 41.69), (-96.88, -92.78)),
         "hplains":((43.73, 48.33), (-104.01, -96.08)),
         }
-    chunk_size = 64
+    chunk_size = 1024
 
     ## treat different geometric views independently regardless of task
     for view_key,vdict in geom_index.items():
@@ -356,7 +390,7 @@ if __name__=="__main__":
                     "cbar_orient":"horizontal",
                     "cartopy_feats":["states", "borders"],
                     },
-                show=True,
+                show=show,
                 )
             ## 0 if OOB, 1 if IB & valid coords, 2 if IB & invalid coords
             nan_map = np.where(
@@ -373,7 +407,7 @@ if __name__=="__main__":
                 latlon_ticks=False,
                 #colors=["white", "blue", "red"],
                 colors=["white", "blue"],
-                show=True,
+                show=show,
                 )
 
         ## extract permutations
@@ -389,7 +423,7 @@ if __name__=="__main__":
                     max_iterations=64,
                     enum_start=0,
                     return_stats=True,
-                    debug=True,
+                    debug=debug,
                     )
 
             if method == "conv":
@@ -406,7 +440,7 @@ if __name__=="__main__":
                     pool_size=pool_size,
                     return_stats=True,
                     nworkers=workers,
-                    debug=True,
+                    debug=debug,
                     )
 
             if method == "fast":
@@ -426,7 +460,7 @@ if __name__=="__main__":
                     kdt_workers=kdt_workers,
                     return_stats=True,
                     nworkers=workers,
-                    debug=True,
+                    debug=debug,
                     )
 
 
@@ -446,14 +480,16 @@ if __name__=="__main__":
                             perm_pkl=pf,
                             coords=latlon,
                             subgrids=test_subgrids,
+                            geom=gg,
                             valid_mask=mask,
                             fig_dir=fig_dir,
-                            chunk_size=64,
+                            chunk_size=chunk_size,
                             plot_stats=True,
                             plot_sparse_chunks=True,
                             num_sparse_chunks=50,
                             seed=200007221750,
-                            debug=True,
+                            debug=debug,
+                            show=show,
                             )
                 except Exception as e:
                     print(f"Failed for {pf.name}")

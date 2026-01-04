@@ -3,27 +3,232 @@ import matplotlib
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+from pprint import pprint
 from pathlib import Path
 from datetime import datetime,timedelta
 from cartopy.mpl.ticker import LatitudeFormatter,LongitudeFormatter
 from matplotlib.colors import ListedColormap
 
-def plot_geo_rgb_basic(rgb:np.ndarray, lat_range:tuple, lon_range:tuple,
-        plot_spec:dict={}, fig_path=None, show=False):
+def _process_rgb_data(rgb_array, gamma, vmin=None, vmax=None, pct_clip=None):
+    """
+    Process RGB data with normalization and gamma correction.
+    If vmin and vmax aren't available, clip between data percentiles.
+    """
+    def normalize_channel(data, vmin, vmax):
+        valid_data = data[~np.isnan(data)]
+        if vmin is None or vmax is None:
+            plow, phigh = pct_clip
+            vmin, vmax = np.percentile(valid_data, [plow, phigh])
+
+        norm_data = np.clip((data - vmin) / (vmax - vmin), 0, 1)
+        gamma_data = np.power(norm_data, 1/gamma)
+        return gamma_data
+
+    r = normalize_channel(rgb_array[:, :, 0], vmin, vmax)
+    g = normalize_channel(rgb_array[:, :, 1], vmin, vmax)
+    b = normalize_channel(rgb_array[:, :, 2], vmin, vmax)
+
+    return np.dstack([r, g, b])
+
+
+def _process_single_channel(
+        data, gamma, cmap, vmin=None, vmax=None, pct_clip=None):
+    """Process single channel data with normalization and colormap."""
+    valid_data = data[~np.isnan(data)]
+
+    if vmin is None or vmax is None:
+        plow, phigh = pct_clip
+        vmin, vmax = np.percentile(valid_data, [plow, phigh])
+
+    norm_data = np.clip((data - vmin) / (vmax - vmin), 0, 1)
+
+    # Apply gamma correction
+    gamma_data = np.power(norm_data, 1/gamma)
+
+    # Get colormap
+    cmap_name = cmap
+
+    cmap = plt.get_cmap(cmap_name)
+
+    # Apply colormap
+    rgba_data = cmap(gamma_data)
+
+    return rgba_data
+
+def plot_geostationary(
+        data, sat_lon, sat_height, sat_sweep, plot_spec={}, fig_path=None,
+        show=False, debug=False):
     """
     """
-    ps = {"title":"", "figsize":(16,12), "border_linewidth":2,
-            "title_size":12 }
+    ## Default plot specifications
+    ps = {
+        "gamma": None, "vmin": None, "vmax": None,
+        "pct_clip": (0.5, 99.5),
+        "cmap":"viridis","colorbar":True,"cb_label":"","cb_orient":"vertical",
+        "projection":{"type":"geographic"}, "extent":None,
+        "add_states":True, "add_coastlines":True, "borders_color":"black",
+        "lw_borders":1,"lw_states":.5,"lw_coastlines": 1,
+        "gridlines":True,"gridlines_color":"white","gridlines_alpha": 0.5,
+        "title": "","figsize":(12,9),"dpi":120,"interp":"nearest",
+        "cartopy_feats":["land","borders","states"],
+        }
     ps.update(plot_spec)
+
+    ## parse input data
+    if isinstance(data, dict):
+        ## dict with "red", "green", "blue" keys
+        rgb_mode = True
+        data_array = np.dstack([data["red"], data["green"], data["blue"]])
+    elif data.ndim == 3 and data.shape[2] == 3:
+        ## RGB array (Y, X, 3)
+        rgb_mode = True
+        data_array = data
+    elif data.ndim == 2:
+        ## Single channel (Y, X)
+        rgb_mode = False
+        data_array = data
+    else:
+        raise ValueError(
+                f"Invalid data shape: {data.shape}. Expected (Y,X,3) or (Y,X)")
+
+    ## set default gamma based on mode
+    if ps["gamma"] is None:
+        ps["gamma"] = 2.0 if rgb_mode else 1.0
+
+    if rgb_mode:
+        ## process RGB composite
+        processed_data = _process_rgb_data(
+                rgb_array=data_array,
+                gamma=ps.get("gamma"),
+                vmin=ps.get("vmin"),
+                vmax=ps.get("vmax"),
+                pct_clip=ps.get("pct_clip"),
+                )
+    else:
+        ## process single channel
+        processed_data = _process_single_channel(
+            data=data_array,
+            gamma=ps.get("gamma"),
+            cmap=ps.get("cmap"),
+            vmin=ps.get("vmin"),
+            vmax=ps.get("vmax"),
+            pct_clip=ps.get("pct_clip"),
+            )
+
+    # Set up projection
+    proj_spec = ps["projection"]
+    if proj_spec["type"] == "geostationary":
+        proj = ccrs.Geostationary(
+            central_longitude=sat_lon,
+            satellite_height=sat_height,
+            sweep_axis=sat_sweep
+        )
+    else:
+        proj = ccrs.PlateCarree()
+
+    transform = proj
+    fig = plt.figure(figsize=ps["figsize"], dpi=ps["dpi"])
+    ax = fig.add_subplot(1, 1, 1, projection=proj)
+
+    extent = ps["extent"]
+    if proj_spec["type"] == "geostationary":
+        if extent is not None:
+            im = ax.imshow(processed_data, extent=extent, origin="upper",
+                          interpolation=ps["interp"])
+        else:
+            im = ax.imshow(processed_data, origin="upper",
+                          interpolation=ps["interp"])
+    else:
+        if extent is not None:
+            im = ax.imshow(processed_data, extent=extent, origin="upper",
+                          interpolation=ps["interp"], transform=transform)
+        else:
+            im = ax.imshow(processed_data, origin="upper",
+                          interpolation=ps["interp"], transform=transform)
+
+    #if proj_spec["type"] == "geostationary" and extent is not None:
+    #    ax.set_extent(extent, crs=transform)
+
+    # Add colorbar for single channel
+    if not rgb_mode and ps["colorbar"]:
+        cbar = plt.colorbar(im, ax=ax, orientation=ps["cb_orient"],
+                           pad=0.02, shrink=0.8)
+        cbar.set_label(ps["cb_label"], fontsize=11)
+
+    # Add map features
+    if "coastlines" in ps.get("cartopy_feats"):
+        ax.coastlines(resolution="50m", color=ps["borders_color"],
+                     linewidth=ps["lw_coastlines"], zorder=3)
+
+    if "borders" in ps.get("cartopy_feats"):
+        ax.add_feature(cfeature.BORDERS, linewidth=ps["lw_borders"],
+                      edgecolor=ps["borders_color"], zorder=3)
+
+    if "states" in ps.get("cartopy_feats"):
+        ax.add_feature(cfeature.STATES.with_scale("50m"),
+                      linewidth=ps["lw_states"],
+                      edgecolor=ps["borders_color"], zorder=3)
+
+    if ps.get("gridlines"):
+        gl = ax.gridlines(
+            draw_labels=proj_spec["type"] != "geostationary",
+            linewidth=0.5,
+            color=ps["gridlines_color"],
+            alpha=ps["gridlines_alpha"],
+            linestyle="--",
+            zorder=4
+            )
+        gl.top_labels = False
+        gl.right_labels = False
+
+    ax.set_title(ps["title"], fontsize=14, weight="bold")
+    plt.tight_layout()
+
+    # Save or show
+    if show:
+        plt.show()
+    if fig_path:
+        plt.savefig(fig_path, bbox_inches="tight", dpi=ps["dpi"])
+        if debug:
+            print(f"Generated {fig_path.as_posix()}")
+
+    return fig, ax
+
+def plot_rgb_geos_on_plate(
+        rgb:np.ndarray, center_lon, sat_height, semi_major, semi_minor,
+        sweep_axis, lat_range:tuple, lon_range:tuple, plot_spec:dict={},
+        fig_path=None, show=False):
+    """
+    """
+    ps = {
+        "title":"", "figsize":(16,12), "border_linewidth":2, "title_size":12,
+        "proj_in":"plate_carree", "proj_in_args":{},
+        "proj_out":"plate_carree", "proj_out_args":{},
+        }
+
+    plt.clf()
+    ps.update(plot_spec)
+    plt.rcParams.update({"font.size":ps.get("text_size", 12)})
     fig = plt.figure(figsize=ps.get("figsize"))
 
-    pc = ccrs.PlateCarree()
+    globe = ccrs.Globe(semimajor_axis=semi_major, semiminor_axis=semi_minor)
+    crs_in = ccrs.Geostationary(
+            central_longitude=center_lon,
+            satellite_height=sat_height,
+            sweep_axis=sweep_axis,
+            globe=globe,
+            )
+    crs_out = ccrs.PlateCarree()
 
-    ax = fig.add_subplot(1, 1, 1, projection=pc)
-    extent = [*lon_range, *lat_range]
-    ax.set_extent(extent, crs=pc)
+    ## Transform the lower-left and upper-right corners
+    lower_left = crs_in.transform_point(lon_range[0], lat_range[0], crs_out)
+    upper_right = crs_in.transform_point(lon_range[1], lat_range[1], crs_out)
+    extent = (lower_left[0], upper_right[0], lower_left[1], upper_right[1])
 
-    ax.imshow(rgb, extent=extent, transform=pc)
+    ax = plt.axes(projection=crs_in)
+
+    ax.imshow(rgb, extent=extent, transform=crs_in, origin="upper",
+        interpolation=ps.get("interp", "none"))
 
     ax.coastlines(
             color=ps.get("border_color", "black"),
@@ -36,6 +241,11 @@ def plot_geo_rgb_basic(rgb:np.ndarray, lat_range:tuple, lon_range:tuple,
 
     plt.title(ps.get("title"), fontweight='bold',
             fontsize=ps.get("title_size"))
+
+    ax.set_extent(
+            [lon_range[0], lon_range[1], lat_range[0], lat_range[1]],
+            crs=crs_out
+            )
 
     if not fig_path is None:
         fig.savefig(fig_path.as_posix(), bbox_inches="tight", dpi=80)
@@ -467,7 +677,7 @@ def plot_geo_tiles(data, lat, lon, shapes=None,
         "geostationary":ccrs.Geostationary,
         }
     ## for geostationary, need central_longitude and satellite_height args
-    crs = crs_type[ps.get("proj_in")](**ps.get("proj_in_args"))
+    crs_in = crs_type[ps.get("proj_in")](**ps.get("proj_in_args"))
     crs_out = crs_type[ps.get("proj_out")](**ps.get("proj_out_args"))
     ax = plt.axes(projection=crs_out)
     fig = plt.gcf()
@@ -504,7 +714,7 @@ def plot_geo_tiles(data, lat, lon, shapes=None,
             }
     '''
 
-    proj_pts = crs_out.transform_points(crs, lon, lat)
+    proj_pts = crs_out.transform_points(crs_in, lon, lat)
 
     tiles = ax.tricontourf(
             proj_pts[...,0],
