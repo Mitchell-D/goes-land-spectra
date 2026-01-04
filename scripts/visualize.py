@@ -5,13 +5,14 @@ from pathlib import Path
 from datetime import datetime,timedelta
 from pprint import pprint
 
-from geos_geom import GeosGeom
-from plotting import plot_geo_rgb,plot_geo_scalar
-from helpers import load_welford_grids,finalize_welford,QueryResults
+from goes_land_spectra.geos_geom import GeosGeom
+from goes_land_spectra.plotting import plot_geo_rgb,plot_geo_scalar
+from goes_land_spectra.helpers import load_welford_grids
+from goes_land_spectra.helpers import finalize_welford,QueryResults
 
 if __name__=="__main__":
-    #proj_root = Path("/rhome/mdodson/goes-land-spectra")
-    proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
+    proj_root = Path("/rhome/mdodson/goes-land-spectra")
+    #proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
     ## directory where domain arrays will be stored.
     geom_dir = proj_root.joinpath("data/domains")
     ## directory where pkls of listings will be stored.

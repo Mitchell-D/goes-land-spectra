@@ -6,7 +6,7 @@ from pathlib import Path
 from numpy.lib.stride_tricks import as_strided
 from datetime import datetime,timedelta
 
-from geos_geom import GeosGeom
+from goes_land_spectra.geos_geom import GeosGeom
 
 TEMP = {
     "C01":(3000,5000),

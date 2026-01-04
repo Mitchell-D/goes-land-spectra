@@ -14,10 +14,10 @@ from pathlib import Path
 from datetime import datetime,timedelta
 from multiprocessing import Pool
 
-from geos_geom import load_geos_geom
-from permutation import permutations_from_configs
-from plotting import plot_multiy_lines,plot_rgb_geos_on_plate
-from plotting import plot_geostationary
+from goes_land_spectra.geos_geom import load_geos_geom
+from goes_land_spectra.permutation import permutations_from_configs
+from goes_land_spectra.plotting import plot_multiy_lines,plot_rgb_geos_on_plate
+from goes_land_spectra.plotting import plot_geostationary
 
 '''
 config_labels = ["target_avg_dist", "roll_threshold", "threshold_diminish",
@@ -315,8 +315,8 @@ def plot_perm_pkl(
                 )
 
 if __name__=="__main__":
-    #proj_root = Path("/rhome/mdodson/goes-land-spectra/")
-    proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
+    proj_root = Path("/rhome/mdodson/goes-land-spectra/")
+    #proj_root = Path("/Users/mtdodson/desktop/projects/goes-land-spectra")
     geom_dir = proj_root.joinpath("data/domains/")
     geom_index = pkl.load(geom_dir.joinpath("index.pkl").open("rb"))
     pkl_dir = proj_root.joinpath("data/permutations/test")
