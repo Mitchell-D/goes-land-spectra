@@ -393,7 +393,7 @@ class QueryResults:
         return QueryResults(sub_paths, self._f)
 
     def __repr__(self):
-        return list(map(lambda p:p.as_posix(),self._p))
+        return str(list(map(lambda p:p.as_posix(),self._p)))
 
     def group(self, group_fields:list, invert=False):
         """

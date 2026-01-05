@@ -18,9 +18,9 @@ class GeosGeom:
     geostationary satellite viewing angles
     """
     def __init__(self, longitude_of_projection_origin:float,
-            e_w_scan_angles:np.array, n_s_scan_angles:np.array,
             perspective_point_height:float, semi_major_axis:float,
-            semi_minor_axis:float, sweep_angle_axis:float):
+            semi_minor_axis:float, sweep_angle_axis:str,
+            e_w_scan_angles:np.array, n_s_scan_angles:np.array):
         """
         Calculate longitudes, latitudes and viewing zenith angles from
         satellite perspective and scan angles
@@ -42,6 +42,22 @@ class GeosGeom:
         self.sweep_angle_axis = sweep_angle_axis
         self._lats,self._lons = self.get_latlon()
         self._vzas = None
+
+    def args(self):
+        return [
+            {
+                "longitude_of_projection_origin": \
+                        self.longitude_of_projection_origin,
+                "perspective_point_height":self.perspective_point_height,
+                "semi_major_axis":self.r_eq,
+                "semi_minor_axis":self.r_pol,
+                "sweep_angle_axis":self.sweep_angle_axis,
+                },
+            {
+                "sa_ew":self.e_w_scan_angles,
+                "sa_ns":self.n_s_scan_angles
+                }
+            ]
 
     def __repr__(self):
         """ Returns a string reporting lat/lon sizes and ranges """
