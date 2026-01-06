@@ -217,3 +217,142 @@ using only language. Doing so in general is thought to require
 more structured and unique algebraic structures learned through
 category theory.
 
+## couterarguments to UMAP / contrastive learning approach
+
+Using a point cloud approach gets rid of meaningful structure that
+is known a-priori, for example temporal adjacency on the daily and
+monthly scale, and flattening dimensions of (month,tod,band,metric)
+obscures cross-axis correlations.
+
+PCA preprocessing can lose meaningful structure when inputs have
+different noise levels, and signals that are locally meaningful may
+be destroyed in this global noise reduction.
+
+**challenges**
+
+UMAP & CAEs will struggle with data size. Furthermore, sample
+imbalance and over-aggregatin of samples will make training
+challenging.
+
+Suggests using 'hierarchical sampling' to find a representative
+subset of ~100k-200k samples for initial UMAP fitting
+
+Parametric UMAP enables training neural network, which facilitates
+batching and more efficient transformation of new data.
+
+For contrastive learning, carfully consider how positive or negative
+samples are defined (ie with spatial proximity, feature similarity).
+
+**reframing**
+
+Perhaps reframe the problem as *temporal dynamics embedding*
+rather than just dimensionality reduction.
+
+**structured embedding**
+
+- use convolution to encode sub-pixel textures
+  - keep in mind that sun/px/sat geometry is important here.
+- use 1d temporal convolution along month/tod axes
+- use spectral attention/group convolution on band dimension
+
+**architecture**
+
+- **heierarchical encoder** (preserve temporal structure longer)
+  - beta-VAE encourages disentanglement of axes
+- **transformer**
+  - treat (band, subpixel, metric)
+
+**composite model**
+
+- independent embeddings for each (band, resolution) combo regardless
+  of time of day or season.
+- Subsequent learning of temporal/seasonal trends based on embedding
+
+**negative mining**
+
+Need proximal negative samples for similar textures but different
+spectra. Combined with contrastive learning, the manifold will be
+more isotropic and uniform at smaller scales.
+
+**validation of results**
+
+effective embeddings...
+
+- map similar land surface types to similar locations
+- reconstruct sub-pixel patterns
+- should be stable across time for stable surfaces
+- should vary wrt time for variable surfaces (ie vegetation)
+
+## spectral/textural embeddings
+
+- 2-stage training (random masks, then fixed masks)
+- may need to train one resolution at a time in hierarchical fashion
+- high masking ratios require significantly longer pre-training.
+- consider combining reconstruction loss with Structural Similarity
+  Index (SSIM), or Huber loss.
+
+I still need to decide how to handle different metrics. Most likely
+I should embed them separately (or only pair mean and stddev) since
+skewness and kurtosis are likely less strong predictors and less
+useful to reconstruct.
+
+Nonetheless, coarser pixel kurtosis may be a good predictor for
+nested higher-resolution textures.
+
+When reconstructing, also consider that the pixel order is less
+important and less feasible to estimate than the overall textural
+and spectral qualities. Consider a loss that reflects this.
+
+One way of addressing this issue is using wasserstein distance.
+That is, sort both by intensity before applying the loss metric.
+
+This is appropriate for a single band, but for 1km -> 2km, spectral
+information is also important. In this consideration, inputs are
+shaped (B, P, F), and pixels are a point cloud in Fd space.
+
+- **Chamfer** distance is fastest (using `torch.cdist`), and
+  calculates distance to closest pixel. Some predictions may map to
+  the same pixel, however.
+
+- **Sinkhorn** divergence uses differentiable approximation of the
+  **Earth Mover's Distance**, encouraging 1:1 pixel matching at the
+  cost of iterative structure.  `geomloss.SamplesLoss` has a good
+  implementation.
+
+- **Sliced wasserstein** reprojects both target and prediction
+  spectra to 1d via a random but mutually identical matrix, then
+  sorts and scores intensities after that.
+
+
+## tensor decomposition
+
+Instead, consider tensor decomposition / factorization methods,
+which produce low-rank tensors preserving low-dimensional structure.
+
+M = A B^T
+
+M has shape (M,N), A has shape (M,r), B has shape (N,r)
+
+The large matrix M is represented by decompositions A and B with
+rank r.
+
+Typically, specialized algorithms must be used to calculate
+decompositions, and they impose tight constraints on factor tensors
+(linear contractiveness, positive definiteness, orthogonality).
+
+FunFact library uses einstein notation based functional
+representation of (nonlinear) tensor expression (via abstract syntax
+tree), and factorizes the data for you.
+
+## from [this article][1]
+
+Consider a tensor decomposition into "fibers and slices", that
+is, vectors and matrices along axis combinations.
+
+
+
+[1]:https://medium.com/@anishhilary97/cp-decomposition-approximating-tensors-using-collection-of-vectors-8db6c25f29ab
+
+
+
+
