@@ -1,6 +1,7 @@
 import numpy as np
 import pickle as pkl
 import time
+import imageio.v3 as iio
 from pprint import pprint
 from pathlib import Path
 from numpy.lib.stride_tricks import as_strided
@@ -8,16 +9,35 @@ from datetime import datetime,timedelta
 
 from goes_land_spectra.geos_geom import GeosGeom
 
-TEMP = {
-    "C01":(3000,5000),
-    "C02":(6000,10000),
-    "C03":(3000,5000),
-    "C05":(3000,5000),
-    "C06":(1500,2500),
-    "C07":(1500,2500),
-    "C13":(1500,2500),
-    "C15":(1500,2500),
-    }
+def mp_gen_gif_from_group(args):
+    return args,gen_gif_from_group(**args)
+def gen_gif_from_group(group_key, group_paths, group_fields, name_fields,
+        out_dir, duration=.1):
+    """
+    Make a gif Given a group of existing image files ordered like a single
+    member of the dict returned by QueryResults.group.
+
+    :@param group_key: tuple of strings identifying this file group
+    :@param group_paths: List of Path objects for images in this group
+    :@param name_fields: string names for underscore-separated fields in
+        all file names
+    :@param out_dir: directory where the subsequent gif will be generated
+    """
+    base_name = None
+    for p in group_paths:
+        ndict = dict(zip(name_fields, p.stem.split("_")))
+        tmp_bn = "_".join([
+            ndict[fk] for fk in name_fields if fk in group_fields
+            ])
+        if base_name is None:
+            base_name = tmp_bn
+        else:
+            assert tmp_bn == base_name, (tmp_bn, base_name)
+    out_path = out_dir.joinpath(f"{base_name}.gif")
+    with iio.imopen(out_path, "w", plugin="pillow") as giff:
+        for p in group_paths:
+            giff.write(iio.imread(p), duration=.1)
+    return out_path
 
 def finalize_welford(welford:dict):
     """
@@ -44,7 +64,7 @@ def finalize_welford(welford:dict):
 
 def load_welford_grids(pkl_paths:list, geom_dir:Path,
         lat_bounds=None, lon_bounds=None, subgrid_rule="complete",
-        reduce_func=np.nanmean, metrics=None, merge=False, res_factor=1):
+        reduce_func="merge", metrics=None, merge=False, res_factor=1):
     """
     Load and re-grid GOES welford pkls
 
@@ -85,6 +105,19 @@ def load_welford_grids(pkl_paths:list, geom_dir:Path,
         subgrid_rule=subgrid_rule,
         oob_value=np.nan,
         )
+
+    '''
+    TEMP = {
+        "C01":(3000,5000),
+        "C02":(6000,10000),
+        "C03":(3000,5000),
+        "C05":(3000,5000),
+        "C06":(1500,2500),
+        "C07":(1500,2500),
+        "C13":(1500,2500),
+        "C15":(1500,2500),
+        }
+    '''
 
     ## calculate the shape of the domain subgrid
     domy,domx = m_domain.shape
@@ -156,16 +189,26 @@ def load_welford_grids(pkl_paths:list, geom_dir:Path,
             out_shape = (cur_shape_2d[0] // cur_fac_tgt,
                 cur_shape_2d[1] // cur_fac_tgt)
             assert cur_fac_tgt % tgt_fac_dom == 0
-            for k in all_metrics:
-                cur[k] = reduce_func(as_strided(
-                    cur[k],
-                    shape=(out_shape[0],out_shape[1],cur_fac_tgt,cur_fac_tgt),
-                    strides=(
-                        cur[k].strides[0]*cur_fac_tgt,
-                        cur[k].strides[1]*cur_fac_tgt,
-                        cur[k].strides[0],
-                        cur[k].strides[1]),
-                        ), axis=(2, 3))
+            if reduce_func!="merge":
+                for k in all_metrics:
+                    cur[k] = reduce_func(as_strided(
+                        cur[k],
+                        shape=(out_shape[0],out_shape[1],
+                            cur_fac_tgt,cur_fac_tgt),
+                        strides=(
+                            cur[k].strides[0]*cur_fac_tgt,
+                            cur[k].strides[1]*cur_fac_tgt,
+                            cur[k].strides[0],
+                            cur[k].strides[1]),
+                            ), axis=(2, 3))
+            else:
+                merged = None
+                for j,i in np.indices((cur_fac_tgt,cur_fac_tgt)).reshape(2,-1):
+                    cur_subpx = {cur[k][j,i] for k in all_metrics}
+                    merged = cur_subpx if merged is None \
+                            else merge_welford(merged, cur_subpx)
+                cur = merged
+
         if merge:
             if res_final is None:
                 res_final = cur
@@ -363,8 +406,8 @@ class QueryResults:
     search files given a common underscore-separated file structure.
     """
     def __init__(self, file_paths, name_fields):
-        self._p = file_paths
-        self._f = name_fields
+        self._p = list(file_paths)
+        self._f = list(name_fields)
 
     @property
     def paths(self):
@@ -385,18 +428,23 @@ class QueryResults:
             kwargs = {**sub_dict, **kwargs}
         for k,v in kwargs.items():
             assert k in self._f,f"{k} must be in {self._f}"
-        sub_paths = [
-            (p,pt) for p,pt in self.tups
-            if all(any((pt[i]==s) if isinstance(s,str) else (pt[i] in s)
-                for s in kwargs.get(k,[pt[i]])) for i,k in enumerate(self._f))
-            ]
+            if isinstance(v, str):
+                kwargs[k] = [kwargs[k]]
+
+        sub_paths = []
+        ## for each file file...
+        for p,pt in self.tups:
+            pdct = dict(zip(self._f,pt))
+            if all(pdct[k] in kwargs[k] for k in kwargs.keys()):
+                sub_paths.append(p)
+
         if len(sub_paths)==0:
             return QueryResults([], self._f)
-        sub_paths,_ = zip(*sub_paths)
+
         return QueryResults(sub_paths, self._f)
 
-    def __repr__(self):
-        return str(list(map(lambda p:p.as_posix(),self._p)))
+    #def __repr__(self):
+    #    return str(list(map(lambda p:p.as_posix(), self._p)))
 
     def group(self, group_fields:list, invert=False):
         """
@@ -413,4 +461,67 @@ class QueryResults:
             if gkey not in groups.keys():
                 groups[gkey] = []
             groups[gkey].append(p)
-        return groups
+        return group_fields,groups
+
+class HConfig:
+    """
+    Hierarchical configuration system mapping query dictionaries to a
+    configuration dict that is the merger of all matching configurations.
+    Priority is given to configurations with more specific query fields.
+    """
+    def __init__(self, config):
+        """Initialize an empty configuration system."""
+        self.configs = []
+        for f,v in config:
+            if isinstance(f, dict):
+                f = f.items()
+            self.add_config(f, v)
+
+    def add_config(self, field, config_dict):
+        """
+        :@param field: List of 2-tuples representing key/value pairs
+        :@param config_dict: Dict to return when this field matches
+        """
+        field = sorted(field)
+        assert len(set(next(zip(*field))))==len(field)
+        if len(self.configs) and field in next(zip(*self.configs)):
+            raise ValueError(f"config field already loaded: {field}")
+        self.configs.append((field, config_dict))
+
+    def query(self, query_dict):
+        """
+        :@param query_dict: Dict of key/value pairs to match against
+        :@return: dict of combined configuration from all matching fields
+        """
+        matches = []
+        for field,config_dict in self.configs:
+            if self._field_matches_query(field, query_dict):
+                matches.append((field, config_dict))
+
+        # Sort by number of tuples (ascending)
+        # so larger fields override smaller ones
+        matches = sorted(matches, key=lambda x:len(x[0]))
+
+        pprint(query_dict)
+        pprint(matches)
+        print()
+        # Combine configs with later (larger)fields
+        # overriding earlier (smaller) ones
+        result = {}
+        for field,config_dict in matches:
+            result.update(config_dict)
+
+        return result
+
+    def _field_matches_query(self, field, query_dict):
+        """ """
+        for key, value in field:
+            if key not in query_dict:
+                return False
+            if isinstance(value, str):
+                if query_dict[key] != value:
+                    return False
+            else:
+                if query_dict[key] not in value:
+                    return False
+        return True

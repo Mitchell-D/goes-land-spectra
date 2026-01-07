@@ -7,8 +7,30 @@ from pprint import pprint
 
 from goes_land_spectra.geos_geom import GeosGeom
 from goes_land_spectra.plotting import plot_geostationary
-from goes_land_spectra.helpers import load_welford_grids
+from goes_land_spectra.helpers import load_welford_grids,HConfig
 from goes_land_spectra.helpers import finalize_welford,QueryResults
+
+swbands = ["C01","C02","C03","C05"]
+lwbands = ["C07","C13","C15"]
+dcmap = "nipy_spectral" ## default color map
+plot_spec_config = [
+    [[("metric","count")],{"vmin":0,"vmax":200,"cmap":dcmap}],
+    [[("metric",["min","max","mean","stddev","kurtosis"])],{"cmap":dcmap}],
+    [[("metric","skewness")],{"cmap":"berlin"}],
+
+    [[("band",swbands),("metric",["mean","min","max"])],{"vmin":0,"vmax":1}],
+    [[("band",lwbands),("metric",["mean","min","max"])],
+        {"vmin":230,"vmax":320}],
+
+    [[("band", swbands), ("metric", "stddev")], {"vmin":0, "vmax":.1}],
+    [[("band", lwbands), ("metric", "stddev")], {"vmin":0, "vmax":12}],
+
+    [[("band", swbands), ("metric", "skewness")], {"vmin":-10, "vmax":10}],
+    [[("band", lwbands), ("metric", "skewness")], {"vmin":-10, "vmax":10}],
+
+    [[("band", swbands), ("metric", "kurtosis")], {"vmin":1, "vmax":120}],
+    [[("band", lwbands), ("metric", "kurtosis")], {"vmin":1, "vmax":120}],
+    ]
 
 if __name__=="__main__":
     proj_root = Path("/rhome/mdodson/goes-land-spectra")
@@ -65,8 +87,11 @@ if __name__=="__main__":
         #mrg_keys,mrg_paths = zip(*qr.group(merge_over, invert=True).items())
         #pprint(dict(zip(mrg_keys,mrg_paths)))
 
-        for mkey,mrg_paths in qr.group(merge_over, invert=True).items():
-
+        mfields,mdict = qr.group(merge_over, invert=True)
+        for mkey,mrg_paths in mdict.items():
+            ## make a dict describing this merged product so that the configuration
+            ## can be efficiently queried
+            product_fields = dict(zip(mfields,mkey))
             ## load the domain information for this group
             domain = list(map(
                 lambda p:p.stem.split("_")[name_fields.index("domain")],
@@ -101,24 +126,23 @@ if __name__=="__main__":
                     merge=True,
                     res_factor=1,
                     )
-            #merged = finalize_welford(merged)
+            merged = finalize_welford(merged)
 
             for k,v in merged.items():
-                #print(k, v.shape, latlon.shape)
-
+                product_fields["metric"] = k
+                hc = HConfig(plot_spec_config)
                 ## getting rid of nans from coordinates
                 m_data_nans = np.isnan(merged[k])
                 m_coord_nans = np.any(np.isnan(gg_dom.latlon), axis=-1)
-                nanmap = np.where(m_coord_nans, 4, np.nan)
-                nanmap = np.where(m_data_nans, 3, nanmap)
-                nanmap = np.where(m_domain, nanmap, 0)
-                m_nans_1d = ~m_coord_nans[m_domain]
 
                 ## plot the data normally
                 #'''
-                out_str = f"{ptype}_{'_'.join(mkey)}_{k}" + \
-                        '-'.join(merge_over)
-                out_path = fig_dir.joinpath(out_str)
+                out_str = f"{ptype}_{'_'.join(mkey)}_{k}"
+                if len(merge_over):
+                    out_str += f"_{'-'.join(merge_over)}"
+                out_path = fig_dir.joinpath(out_str + ".png")
+                print(out_path.stem, k,
+                    f"{np.nanmin(merged[k]):.3f} {np.nanmax(merged[k]):.3f}")
                 plot_geostationary(
                     data=np.where(m_coord_nans, np.nan, merged[k]),
                     sat_lon=gg_dom.longitude_of_projection_origin,
@@ -130,11 +154,11 @@ if __name__=="__main__":
                             },
                         "title":f"{' '.join(mkey)} {k}",
                         "extent":extent,
-                        "cmap":"nipy_spectral",
                         "cb_orient":"horizontal",
                         "gridlines_color":"black",
                         "dpi":160,
                         "interp":"none",
+                        **hc.query(product_fields),
                         },
                     fig_path=out_path,
                     show=False,
@@ -144,6 +168,10 @@ if __name__=="__main__":
 
                 ## plot nan values
                 '''
+                nanmap = np.where(m_coord_nans, 4, np.nan)
+                nanmap = np.where(m_data_nans, 3, nanmap)
+                nanmap = np.where(m_domain, nanmap, 0)
+
                 out_str = f"{ptype}_NANS_{'_'.join(mkey)}_{k}" + \
                         '-'.join(merge_over)
                 out_path = fig_dir.joinpath(out_str)

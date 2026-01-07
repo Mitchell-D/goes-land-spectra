@@ -37,7 +37,7 @@ def plot_geostationary(
     """
     ## Default plot specifications
     ps = {
-        "gamma": None, "vmin": None, "vmax": None,
+        "gamma": None, "vmin": None, "vmax": None, "norm":"linear",
         "pct_clip": (0.5, 99.5),
         "cmap":"plasma","colorbar":True,"cb_label":"","cb_orient":"vertical",
         "projection":{"type":"geographic"}, "extent":None,
@@ -117,6 +117,9 @@ def plot_geostationary(
                     processed_data,
                     extent=extent,
                     origin="upper",
+                    norm=ps.get("norm"),
+                    vmin=ps.get("vmin"),
+                    vmax=ps.get("vmax"),
                     interpolation=ps["interp"],
                     cmap=ps.get("cmap"),
                     )
@@ -124,6 +127,9 @@ def plot_geostationary(
             im = ax.imshow(
                     processed_data,
                     origin="upper",
+                    norm=ps.get("norm"),
+                    vmin=ps.get("vmin"),
+                    vmax=ps.get("vmax"),
                     interpolation=ps["interp"],
                     cmap=ps.get("cmap"),
                     )
@@ -133,6 +139,9 @@ def plot_geostationary(
                     processed_data,
                     extent=extent,
                     origin="upper",
+                    norm=ps.get("norm"),
+                    vmin=ps.get("vmin"),
+                    vmax=ps.get("vmax"),
                     interpolation=ps["interp"],
                     transform=transform,
                     cmap=ps.get("cmap"),
@@ -141,6 +150,9 @@ def plot_geostationary(
             im = ax.imshow(
                     processed_data,
                     origin="upper",
+                    norm=ps.get("norm"),
+                    vmin=ps.get("vmin"),
+                    vmax=ps.get("vmax"),
                     interpolation=ps["interp"],
                     transform=transform,
                     cmap=ps.get("cmap"),
