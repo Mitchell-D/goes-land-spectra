@@ -2,6 +2,7 @@ import numpy as np
 import pickle as pkl
 import time
 import gc
+import numba
 #import h5py
 import itertools
 import json
@@ -24,9 +25,12 @@ geom_dir = proj_root.joinpath("data/domains")
 ## directory where pkls of listings will be stored.
 listing_dir = proj_root.joinpath("data/listings")
 result_dir = proj_root.joinpath("data/results")
-out_dir = proj_root.joinpath("data/cfds")
+out_dir = proj_root.joinpath("data/zarr")
 perm_path = proj_root.joinpath(
         "data/permutations/perm_geom-goes-conus-0_final.pkl")
+
+## for reshaping and permuting result array data
+nworkers = 12
 
 ## valid multiples of domain axis sizes for higher resolutions
 valid_res_facs = [1,2,4]
@@ -93,26 +97,26 @@ file_params = {
     "day-500m":{
         "coords":["px","subpx","month","tod","band","metric"],
         "res_fac":4,
-        "lock_axes":["subpx", "month"],
-        "chunk_config":[2048, 16, 12, 3, 3, 3],
+        #"lock_axes":["subpx", "month"],
+        "chunk_config":[2048, 16, 3, 3, 1, 2],
         },
     "day-1km":{
         "coords":["px","subpx","month","tod","band","metric"],
         "res_fac":2,
-        "lock_axes":["subpx", "month"],
-        "chunk_config":[2048, 4, 12, 3, 3, 3],
+        #"lock_axes":["subpx", "month"],
+        "chunk_config":[2048, 4, 3, 3, 2, 2],
         },
     "day-2km":{
         "coords":["px","subpx","month","tod","band","metric"],
         "res_fac":1,
-        "lock_axes":["subpx", "month"],
-        "chunk_config":[2048, 1, 12, 3, 3, 3],
+        #"lock_axes":["subpx", "month"],
+        "chunk_config":[2048, 1, 3, 3, 2, 2],
         },
     "night-2km":{
         "coords":["px", "subpx", "month", "tod", "band", "metric"],
         "res_fac":1,
-        "lock_axes":["subpx", "month"],
-        "chunk_config":[2048, 1, 12, 3, 3, 3],
+        #"lock_axes":["subpx", "month"],
+        "chunk_config":[2048, 1, 3, 3, 3, 3],
         }
     }
 
@@ -142,7 +146,7 @@ gg_domain = GeosGeom(**ggargs_domain)
 ## determine the path to the zarr file being created.
 out_path = out_dir.joinpath(f"cfd_{'_'.join(out_fields)}.zarr")
 if out_path.exists():
-    print(f"Already exists: {out_path.as_posix()}.")
+    print(f"Already exists: {out_path.as_posix()}")
     exit(0)
 
 """ -- ( load the domain geometry for all resolutions ) -- """
@@ -221,8 +225,8 @@ for rf in valid_res_facs:
 """ -- ( make sure that selected pkls are valid wrt axis features ) -- """
 
 ## make a mapping from all unique file axis combinations back to the dataset
-## that contains them. This enforces that each axis field combo maps to only
-## a single dataset.
+## that contains them and their axis coordinate index within the dataset.
+## This enforces that each axis field combo maps to only a single dataset.
 combo_to_dataset = {}
 for dsk,dsd in datasets.items():
     assert next(zip(*dsd)) == tuple(file_params[dsk]["coords"]), \
@@ -234,7 +238,8 @@ for dsk,dsd in datasets.items():
     for c in combos:
         if c in combo_to_dataset.keys():
             raise ValueError(f"{c} must map to only 1 valid dataset")
-        combo_to_dataset[c] = dsk
+        cix = [dict(dsd)[af].index(av) for af,av in zip(axis_fields,c)]
+        combo_to_dataset[c] = (dsk, cix)
 
 ## group existing results pkls by their axis fields
 qr = QueryResults([
@@ -245,6 +250,25 @@ qr = qr.subset(**include_only)
 axdict = qr.group(axis_fields)
 assert all(len(v)==1 for k,v in axdict.items()), \
         "each band/tod/month combination must be unique!"
+
+## print nan information
+'''
+for ak,rpath in [(k,v[0]) for k,v in axdict.items()]:
+    rpath.stem.split("_")
+    dsk,cix = combo_to_dataset[ak]
+    dsdict = dict(datasets[dsk])
+    dslabels = next(zip(*datasets[dsk]))
+
+    res,meta = pkl.load(rpath.open("rb"))
+    rf = file_params[dsk]["res_fac"]
+    for mk in metrics:
+        print(mk, np.count_nonzero(0==res[mk][m_valid_1d[rf]]))
+        print(mk, np.count_nonzero(
+            np.isnan(res[mk])), res[mk].size)
+        print(mk, np.count_nonzero(
+            np.isnan(res[mk][m_valid_1d[rf]])), res[mk].size)
+        print()
+'''
 
 """ -- ( create the zarr file ) -- """
 
@@ -279,11 +303,13 @@ ds_perm = grp_root.create_array(
         compressors=[compressor],
         )
 ds_perm[...] = perm
+print(f"Added permutation with shape: {perm.shape}")
 
 ## ixmaps feature shape guide:
 ## (ixy, ixx, ixd, ixv, ixs)
 ## (hi-res y, hi-res x ixs, hi-res 1d domain ix, 1d valid ix, subpixel ix)
 
+ix_maps_1d = {}
 ## for each distinct spatial resolution...
 for rf in valid_res_facs:
     ## add valid mask data ()
@@ -296,9 +322,9 @@ for rf in valid_res_facs:
         #chunks=None,
         )
     grp_valid[rfk][...] = m_valid[rf]
+    print(f"Added {rf} valid mask with shape: {m_valid[rf].shape}")
 
     ## add index map data ()
-    print(f"{ix_maps[rf].shape=}")
     grp_ixmaps.create_array(
         rfk,
         shape=ix_maps[rf].shape,
@@ -307,6 +333,7 @@ for rf in valid_res_facs:
         compressors=[compressor],
         )
     grp_ixmaps[rfk][...] = ix_maps[rf][perm[:,0]]
+    print(f"Added {rf} index map with shape: {ix_maps[rf].shape}")
 
     ## convert the scan angles to the (pixel, subpixel) form
     #'''
@@ -316,22 +343,10 @@ for rf in valid_res_facs:
         ], axis=-1)
 
     sas_psp = np.full((N,rf**2,2), np.nan, dtype=np.float32)
-    ix_map_1d = ix_maps[rf].reshape(-1,ix_maps[rf].shape[-1])
-    print(ix_map_1d.shape)
-    print(ix_map_1d[:32])
-    sas_psp[ix_map_1d[:,3],ix_map_1d[:,4]] = sas[ix_map_1d[:,0],ix_map_1d[:,1]]
+    ix_maps_1d[rf] = ix_maps[rf].reshape(-1,ix_maps[rf].shape[-1])
+    sas_psp[ix_maps_1d[rf][:,3],ix_maps_1d[rf][:,4]] = \
+            sas[ix_maps_1d[rf][:,0],ix_maps_1d[rf][:,1]]
 
-    #'''
-    '''
-    sas = np.stack([
-        geoms[m_valid[rf].shape][0].args()[1]["sa_ns"],
-        geoms[m_valid[rf].shape][0].args()[1]["sa_ew"],
-        ], axis=-1)
-    sas[ix_maps[rf][...,0],ix_maps[rf][...,1]]
-    '''
-
-
-    print(f"{sas_psp.shape=}")
     grp_geom.create_array(
         rfk,
         shape=sas_psp.shape,
@@ -340,11 +355,96 @@ for rf in valid_res_facs:
         compressors=compressor,
         )
     grp_geom[rfk][...] = sas_psp[perm[:,0]]
+    print(f"Added {rf} scan angles with shape: {sas_psp.shape}")
 
 ## axis keys and pkl file paths
-for ak,rpath in [(k,v[0]) for k,v in axdict.items()]:
-    rpath.stem.split("_")
-    dsk = combo_to_dataset[ak]
-    print(f"{ak} => {dsk}")
+for dsk,dsv in datasets.items():
+    rf = file_params[dsk]["res_fac"]
+    dsd = dict(dsv)
+    axlen = [len(dsd[k]) for k in axis_fields]
+    array_shape = (int(N),rf**2,*axlen,len(metrics))
+    grp_data.create_array(
+        dsk,
+        shape=array_shape,
+        dtype=np.float32,
+        chunks=file_params[dsk]["chunk_config"],
+        compressors=[compressor],
+        )
+    print(f"Added {dsk} with shape {array_shape}")
 
-print(grp_root)
+'''
+## (px,subpx,month,tod,band,metric)
+im1dnb = numba.typed.Dict.empty(numba.types.int64,
+        numba.types.uint32[:,:])
+
+for rf in valid_res_facs:
+    im1dnb[rf] = ix_maps_1d[rf].astype(np.uint32)
+@numba.njit
+def _reformat_result_array(A, B, pixs, spixs, dixs, pmtn):
+    for i in range(pixs.shape[0]):
+        B[pixs[i],spixs[i]] = A[dixs][pmtn[i]]
+    return B
+'''
+
+def _mp_extract_and_reindex(args):
+    return args,_extract_and_reindex(**args)
+def _extract_and_reindex(axis_key, result_pkl_path):
+    dsk,cix = combo_to_dataset[axis_key]
+    dsdict = dict(datasets[dsk])
+    dslabels = next(zip(*datasets[dsk]))
+
+    res,meta = pkl.load(result_pkl_path.open("rb"))
+    rf = res["shape"][0] // m_dom[1].shape[0]
+    assert rf in m_dom.keys(), rf
+
+    res = np.stack(
+            [res[mk] for mk in metrics],
+            axis=-1,
+            dtype=np.float32,
+            )#
+    res_psp = np.full((N, rf**2,  len(metrics)), np.nan, dtype=np.float32)
+    res_psp[ix_maps_1d[rf][:,3],ix_maps_1d[rf][:,4]] = res[ix_maps_1d[rf][:,2]]
+    return res_psp[perm[:,0]],dsk,cix
+
+exargs = [{"axis_key":ak, "result_pkl_path":v[0]} for ak,v in axdict.items()]
+with Pool(nworkers) as pool:
+    for args,(X,dsk,cix) in pool.imap_unordered(
+            _mp_extract_and_reindex, exargs):
+        grp_data[dsk][:,:,*cix,:] = X
+        print(f"Added to {dsk}: {X.shape} of {args['axis_key']} ")
+
+'''
+for ak,rpath in [(k,v[0]) for k,v in axdict.items()]:
+    dsk,cix = combo_to_dataset[ak]
+    dsdict = dict(datasets[dsk])
+    dslabels = next(zip(*datasets[dsk]))
+
+    res,meta = pkl.load(rpath.open("rb"))
+    rf = res["shape"][0] // m_dom[1].shape[0]
+    assert rf in m_dom.keys(), rf
+    #print(f"{ak} => {dsk}")
+
+    res = np.stack(
+            [res[mk] for mk in metrics],
+            axis=-1,
+            dtype=np.float32,
+            )#[m_valid_1d[rf]]
+    nans_0 = np.count_nonzero(np.isnan(res))
+    res_psp = np.full((N, rf**2,  len(metrics)), np.nan, dtype=np.float32)
+    res_psp[ix_maps_1d[rf][:,3],ix_maps_1d[rf][:,4]] = res[ix_maps_1d[rf][:,2]]
+    nans_1 = np.count_nonzero(np.isnan(res_psp))
+    print(f"og nans:{nans_0/res.size} ; reindex nans:{nans_1/res_psp.size}")
+
+    #res_psp = _reformat_result_array(
+    #        A=res,
+    #        B=res_psp,
+    #        pixs=ix_maps_1d[rf][:,3],
+    #        spixs=ix_maps_1d[rf][:,4],
+    #        dixs=ix_maps_1d[rf][:,2],
+    #        pmtn=perm[:,0],
+    #        )[:,:,None,None,None,:]
+
+    grp_data[dsk][:,:,*cix,:] = res_psp[perm[:,0]]
+    print(f"Added to {dsk}: {res.shape} of {ak} ")
+    print()
+'''

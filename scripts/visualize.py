@@ -6,7 +6,7 @@ from datetime import datetime,timedelta
 from pprint import pprint
 
 from goes_land_spectra.geos_geom import GeosGeom
-from goes_land_spectra.plotting import plot_geo_rgb,plot_geo_scalar
+from goes_land_spectra.plotting import plot_geostationary
 from goes_land_spectra.helpers import load_welford_grids
 from goes_land_spectra.helpers import finalize_welford,QueryResults
 
@@ -18,13 +18,14 @@ if __name__=="__main__":
     ## directory where pkls of listings will be stored.
     listing_dir = proj_root.joinpath("data/listings")
     out_dir = proj_root.joinpath("data/results")
-    fig_dir = proj_root.joinpath("figures")
+    fig_dir = proj_root.joinpath("figures/scalar")
 
     name_fields = ["satellite","listing", "stime", "ftime",
             "domain", "month", "tod", "band"]
 
-    lat_bounds = (30,40)
-    lon_bounds = (-90,-75)
+    #lat_bounds = (30,40)
+    #lon_bounds = (-90,-75)
+    lat_bounds,lon_bounds = None,None
 
     ## result pkls are stratified by domain, listing, ToD and band
     include_only = {
@@ -33,16 +34,17 @@ if __name__=="__main__":
         "listing":["clearland-l1b-c0"],
         #"tod":["64800"], ## in seconds, only 18z
         #"tod":["54000","64800","75600"], ## in seconds, only 18z
-        "tod":["0"], ## in seconds, only 18z
-        "month":["01",],
-        "band":["C13"]
+        #"tod":["0"], ## in seconds, only 18z
+        #"month":["01",],
+        #"band":["C13"]
         #"month":["11","12","01"],
         #"month":["07",],
         }
 
     plot_types = ["scalar", "rgb"]
     plot_metrics = ["min", "max", "m1","m2","m3","m4"]
-    merge_over = ["tod", "month"]
+    #merge_over = ["tod", "month"]
+    merge_over = []
 
     plot_reqs = {
         "rgb":{
@@ -56,14 +58,38 @@ if __name__=="__main__":
             },
         }
 
-    qr = QueryResults(list(out_dir.iterdir()), name_fields)
     for ptype in plot_types:
+        qr = QueryResults(list(out_dir.iterdir()), name_fields)
         tmp_incl = {**include_only, **plot_reqs[ptype].get("force_subset",{})}
         qr = qr.subset(**tmp_incl)
         #mrg_keys,mrg_paths = zip(*qr.group(merge_over, invert=True).items())
         #pprint(dict(zip(mrg_keys,mrg_paths)))
 
-        for mrg_keys,mrg_paths in qr.group(merge_over, invert=True).items():
+        for mkey,mrg_paths in qr.group(merge_over, invert=True).items():
+
+            ## load the domain information for this group
+            domain = list(map(
+                lambda p:p.stem.split("_")[name_fields.index("domain")],
+                mrg_paths
+                ))
+            assert all(d==domain[0] for d in domain[1:])
+            domain = domain[0]
+            ggdict = pkl.load(geom_dir.joinpath(f"{domain}.pkl").open("rb"))
+            ## domain is always defined in terms of the spatially smallest mask
+            dkey = sorted(ggdict.keys(), key=lambda t:t[0]*t[1])[0]
+            ggargs_domain,m_domain = ggdict[dkey]
+            gg_dom = GeosGeom(**ggargs_domain)
+            extent = [
+                np.amin(gg_dom.e_w_scan_angles) * \
+                        gg_dom.perspective_point_height,
+                np.amax(gg_dom.e_w_scan_angles) * \
+                        gg_dom.perspective_point_height,
+                np.amin(gg_dom.n_s_scan_angles) * \
+                        gg_dom.perspective_point_height,
+                np.amax(gg_dom.n_s_scan_angles) * \
+                        gg_dom.perspective_point_height,
+                ]
+
             merged,latlon = load_welford_grids(
                     pkl_paths=mrg_paths,
                     geom_dir=geom_dir,
@@ -73,24 +99,91 @@ if __name__=="__main__":
                     reduce_func=np.nanmean,
                     metrics=None, ## TODO: implement metric subset after merge
                     merge=True,
-                    res_factor=4,
+                    res_factor=1,
                     )
-            merged = finalize_welford(merged)
+            #merged = finalize_welford(merged)
+
             for k,v in merged.items():
-                print(k, v.shape, latlon.shape)
-                out_str = f"{ptype}_{'_'.join(mrg_keys)}_{k}_" + \
+                #print(k, v.shape, latlon.shape)
+
+                ## getting rid of nans from coordinates
+                m_data_nans = np.isnan(merged[k])
+                m_coord_nans = np.any(np.isnan(gg_dom.latlon), axis=-1)
+                nanmap = np.where(m_coord_nans, 4, np.nan)
+                nanmap = np.where(m_data_nans, 3, nanmap)
+                nanmap = np.where(m_domain, nanmap, 0)
+                m_nans_1d = ~m_coord_nans[m_domain]
+
+                ## plot the data normally
+                #'''
+                out_str = f"{ptype}_{'_'.join(mkey)}_{k}" + \
                         '-'.join(merge_over)
                 out_path = fig_dir.joinpath(out_str)
+                plot_geostationary(
+                    data=np.where(m_coord_nans, np.nan, merged[k]),
+                    sat_lon=gg_dom.longitude_of_projection_origin,
+                    sat_height=gg_dom.perspective_point_height,
+                    sat_sweep=gg_dom.sweep_angle_axis,
+                    plot_spec={
+                        "projection":{
+                            "type":"geostationary",
+                            },
+                        "title":f"{' '.join(mkey)} {k}",
+                        "extent":extent,
+                        "cmap":"nipy_spectral",
+                        "cb_orient":"horizontal",
+                        "gridlines_color":"black",
+                        "dpi":160,
+                        "interp":"none",
+                        },
+                    fig_path=out_path,
+                    show=False,
+                    debug=False,
+                    )
+                #'''
+
+                ## plot nan values
+                '''
+                out_str = f"{ptype}_NANS_{'_'.join(mkey)}_{k}" + \
+                        '-'.join(merge_over)
+                out_path = fig_dir.joinpath(out_str)
+                plot_geostationary(
+                    data=nanmap,
+                    sat_lon=gg_dom.longitude_of_projection_origin,
+                    sat_height=gg_dom.perspective_point_height,
+                    sat_sweep=gg_dom.sweep_angle_axis,
+                    plot_spec={
+                        "projection":{
+                            "type":"geostationary",
+                            },
+                        "title":f"{k} ({' '.join(mkey)})",
+                        "extent":extent,
+                        "cmap":"plasma",
+                        "cb_orient":"horizontal",
+                        "gridlines_color":"black",
+                        "dpi":180,
+                        "interp":"none",
+                        },
+                    fig_path=out_path,
+                    show=False,
+                    debug=False,
+                    )
+                '''
+
+                ## plot the data using geo_scalar method
+                '''
                 plot_geo_scalar(
                     data=merged[k],
-                    latitude=latlon[...,0],
-                    longitude=latlon[...,1],
+                    lat=latlon[...,0],
+                    lon=latlon[...,1],
                     plot_spec={
+                        "title":f""
                         "cbar_orient":"horizontal",
                         },
                     fig_path=out_path,
                     show=False,
                     )
+                '''
 
     ## sanity check valid counts in results dir
     '''

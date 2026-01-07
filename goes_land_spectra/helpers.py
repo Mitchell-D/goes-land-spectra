@@ -385,11 +385,14 @@ class QueryResults:
             kwargs = {**sub_dict, **kwargs}
         for k,v in kwargs.items():
             assert k in self._f,f"{k} must be in {self._f}"
-        sub_paths,_ = zip(*[
+        sub_paths = [
             (p,pt) for p,pt in self.tups
             if all(any((pt[i]==s) if isinstance(s,str) else (pt[i] in s)
                 for s in kwargs.get(k,[pt[i]])) for i,k in enumerate(self._f))
-            ])
+            ]
+        if len(sub_paths)==0:
+            return QueryResults([], self._f)
+        sub_paths,_ = zip(*sub_paths)
         return QueryResults(sub_paths, self._f)
 
     def __repr__(self):
@@ -403,6 +406,7 @@ class QueryResults:
         assert all(f in self._f for f in group_fields),group_fields
         if invert:
             group_fields = list(set(self._f)-set(group_fields))
+        group_fields = sorted(group_fields, key=lambda k:self._f.index(k))
         gixs = [self._f.index(f) for f in group_fields]
         for p,t in self.tups:
             gkey = tuple(t[ix] for ix in gixs)

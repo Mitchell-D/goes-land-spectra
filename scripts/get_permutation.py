@@ -230,17 +230,17 @@ def plot_perm_pkl(
 
         ## must convert to meters wrt NADIR
         extent = [
-            np.amin(geom.e_w_scan_angles)*gg.perspective_point_height,
-            np.amax(geom.e_w_scan_angles)*gg.perspective_point_height,
-            np.amin(geom.n_s_scan_angles)*gg.perspective_point_height,
-            np.amax(geom.n_s_scan_angles)*gg.perspective_point_height,
+            np.amin(geom.e_w_scan_angles)*geom.perspective_point_height,
+            np.amax(geom.e_w_scan_angles)*geom.perspective_point_height,
+            np.amin(geom.n_s_scan_angles)*geom.perspective_point_height,
+            np.amax(geom.n_s_scan_angles)*geom.perspective_point_height,
             ]
         #'''
         plot_geostationary(
             data=rgb,
-            sat_lon=gg.longitude_of_projection_origin,
-            sat_height=gg.perspective_point_height,
-            sat_sweep=gg.sweep_angle_axis,
+            sat_lon=geom.longitude_of_projection_origin,
+            sat_height=geom.perspective_point_height,
+            sat_sweep=geom.sweep_angle_axis,
             plot_spec={
                 "projection":{
                     "type":"geostationary",
@@ -272,18 +272,18 @@ def plot_perm_pkl(
 
         ## must convert to meters wrt NADIR
         extent = [
-            np.amin(geom.e_w_scan_angles)*gg.perspective_point_height,
-            np.amax(geom.e_w_scan_angles)*gg.perspective_point_height,
-            np.amin(geom.n_s_scan_angles)*gg.perspective_point_height,
-            np.amax(geom.n_s_scan_angles)*gg.perspective_point_height,
+            np.amin(geom.e_w_scan_angles)*geom.perspective_point_height,
+            np.amax(geom.e_w_scan_angles)*geom.perspective_point_height,
+            np.amin(geom.n_s_scan_angles)*geom.perspective_point_height,
+            np.amax(geom.n_s_scan_angles)*geom.perspective_point_height,
             ]
 
         #'''
         plot_geostationary(
             data=rgb,
-            sat_lon=gg.longitude_of_projection_origin,
-            sat_height=gg.perspective_point_height,
-            sat_sweep=gg.sweep_angle_axis,
+            sat_lon=geom.longitude_of_projection_origin,
+            sat_height=geom.perspective_point_height,
+            sat_sweep=geom.sweep_angle_axis,
             plot_spec={
                 "projection":{
                     "type":"geostationary",

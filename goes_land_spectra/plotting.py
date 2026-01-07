@@ -30,31 +30,6 @@ def _process_rgb_data(rgb_array, gamma, vmin=None, vmax=None, pct_clip=None):
 
     return np.dstack([r, g, b])
 
-
-def _process_single_channel(
-        data, gamma, cmap, vmin=None, vmax=None, pct_clip=None):
-    """Process single channel data with normalization and colormap."""
-    valid_data = data[~np.isnan(data)]
-
-    if vmin is None or vmax is None:
-        plow, phigh = pct_clip
-        vmin, vmax = np.percentile(valid_data, [plow, phigh])
-
-    norm_data = np.clip((data - vmin) / (vmax - vmin), 0, 1)
-
-    # Apply gamma correction
-    gamma_data = np.power(norm_data, 1/gamma)
-
-    # Get colormap
-    cmap_name = cmap
-
-    cmap = plt.get_cmap(cmap_name)
-
-    # Apply colormap
-    rgba_data = cmap(gamma_data)
-
-    return rgba_data
-
 def plot_geostationary(
         data, sat_lon, sat_height, sat_sweep, plot_spec={}, fig_path=None,
         show=False, debug=False):
@@ -64,7 +39,7 @@ def plot_geostationary(
     ps = {
         "gamma": None, "vmin": None, "vmax": None,
         "pct_clip": (0.5, 99.5),
-        "cmap":"viridis","colorbar":True,"cb_label":"","cb_orient":"vertical",
+        "cmap":"plasma","colorbar":True,"cb_label":"","cb_orient":"vertical",
         "projection":{"type":"geographic"}, "extent":None,
         "add_states":True, "add_coastlines":True, "borders_color":"black",
         "lw_borders":1,"lw_states":.5,"lw_coastlines": 1,
@@ -105,15 +80,20 @@ def plot_geostationary(
                 pct_clip=ps.get("pct_clip"),
                 )
     else:
-        ## process single channel
-        processed_data = _process_single_channel(
-            data=data_array,
-            gamma=ps.get("gamma"),
-            cmap=ps.get("cmap"),
-            vmin=ps.get("vmin"),
-            vmax=ps.get("vmax"),
-            pct_clip=ps.get("pct_clip"),
-            )
+        ## process single channel, optionally applying gamma correction,
+        ## percentile clipping, and color mapping
+        processed_data = data_array
+        '''
+        valid_data = data[~np.isnan(data)]
+        vmin,vmax = ps.get("vmin"),ps.get("vmax")
+        if vmin is None or vmax is None:
+            plow, phigh = ps.get("pct_clip")
+            vmin, vmax = np.percentile(valid_data, [plow, phigh])
+        norm_data = np.clip((data_array - vmin) / (vmax - vmin), 0, 1)
+        gamma_data = np.power(norm_data, 1/ps.get("data"))
+        cmap = plt.get_cmap(ps.get("cmap"))
+        processed_data = cmap(gamma_data)
+        '''
 
     # Set up projection
     proj_spec = ps["projection"]
@@ -122,7 +102,7 @@ def plot_geostationary(
             central_longitude=sat_lon,
             satellite_height=sat_height,
             sweep_axis=sat_sweep
-        )
+            )
     else:
         proj = ccrs.PlateCarree()
 
@@ -133,41 +113,78 @@ def plot_geostationary(
     extent = ps["extent"]
     if proj_spec["type"] == "geostationary":
         if extent is not None:
-            im = ax.imshow(processed_data, extent=extent, origin="upper",
-                          interpolation=ps["interp"])
+            im = ax.imshow(
+                    processed_data,
+                    extent=extent,
+                    origin="upper",
+                    interpolation=ps["interp"],
+                    cmap=ps.get("cmap"),
+                    )
         else:
-            im = ax.imshow(processed_data, origin="upper",
-                          interpolation=ps["interp"])
+            im = ax.imshow(
+                    processed_data,
+                    origin="upper",
+                    interpolation=ps["interp"],
+                    cmap=ps.get("cmap"),
+                    )
     else:
         if extent is not None:
-            im = ax.imshow(processed_data, extent=extent, origin="upper",
-                          interpolation=ps["interp"], transform=transform)
+            im = ax.imshow(
+                    processed_data,
+                    extent=extent,
+                    origin="upper",
+                    interpolation=ps["interp"],
+                    transform=transform,
+                    cmap=ps.get("cmap"),
+                    )
         else:
-            im = ax.imshow(processed_data, origin="upper",
-                          interpolation=ps["interp"], transform=transform)
+            im = ax.imshow(
+                    processed_data,
+                    origin="upper",
+                    interpolation=ps["interp"],
+                    transform=transform,
+                    cmap=ps.get("cmap"),
+                    )
 
     #if proj_spec["type"] == "geostationary" and extent is not None:
     #    ax.set_extent(extent, crs=transform)
 
     # Add colorbar for single channel
     if not rgb_mode and ps["colorbar"]:
-        cbar = plt.colorbar(im, ax=ax, orientation=ps["cb_orient"],
-                           pad=0.02, shrink=0.8)
+        cbar = plt.colorbar(
+                im,
+                ax=ax,
+                orientation=ps.get("cb_orient","horizontal"),
+                cmap=ps.get("cmap"),
+                pad=ps.get("cb_pad", .02),
+                shrink=ps.get("cb_shrink", .9),
+                )
         cbar.set_label(ps["cb_label"], fontsize=11)
 
     # Add map features
     if "coastlines" in ps.get("cartopy_feats"):
-        ax.coastlines(resolution="50m", color=ps["borders_color"],
-                     linewidth=ps["lw_coastlines"], zorder=3)
+        ax.coastlines(
+                resolution="50m",
+                color=ps["borders_color"],
+                linewidth=ps["lw_coastlines"],
+                zorder=3,
+                )
 
     if "borders" in ps.get("cartopy_feats"):
-        ax.add_feature(cfeature.BORDERS, linewidth=ps["lw_borders"],
-                      edgecolor=ps["borders_color"], zorder=3)
+        ax.add_feature(
+                cfeature.BORDERS,
+                linewidth=ps["lw_borders"],
+                edgecolor=ps["borders_color"],
+                zorder=3,
+                )
 
     if "states" in ps.get("cartopy_feats"):
-        ax.add_feature(cfeature.STATES.with_scale("50m"),
-                      linewidth=ps["lw_states"],
-                      edgecolor=ps["borders_color"], zorder=3)
+        ax.add_feature(
+                cfeature.STATES.with_scale("50m"),
+                linewidth=ps["lw_states"],
+                edgecolor=ps["borders_color"],
+                zorder=3,
+                )
 
     if ps.get("gridlines"):
         gl = ax.gridlines(
@@ -571,7 +588,6 @@ def plot_geo_scalar(data, lat, lon, hatch_data=None, shapes=None,
             "norm":ps.get("vmax"),
             }
 
-    print(lon.shape, lat.shape, data.shape)
     if use_contours:
         scat = ax.contourf(lon, lat, data, **cmap_params)
     else:
