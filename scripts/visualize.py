@@ -1,6 +1,8 @@
 import pickle as pkl
 import numpy as np
 import matplotlib.pyplot as plt
+import cmasher as cmr
+from multiprocessing import Pool
 from pathlib import Path
 from datetime import datetime,timedelta
 from pprint import pprint
@@ -10,13 +12,14 @@ from goes_land_spectra.plotting import plot_geostationary
 from goes_land_spectra.helpers import load_welford_grids,HConfig
 from goes_land_spectra.helpers import finalize_welford,QueryResults
 
-swbands = ["C01","C02","C03","C05"]
+swbands = ["C01","C02","C03","C05","C06"]
 lwbands = ["C07","C13","C15"]
-dcmap = "nipy_spectral" ## default color map
+lcmap = cmr.chroma ## linear color map
+dcmap = cmr.pride ## diverging color map
 plot_spec_config = [
-    [[("metric","count")],{"vmin":0,"vmax":200,"cmap":dcmap}],
-    [[("metric",["min","max","mean","stddev","kurtosis"])],{"cmap":dcmap}],
-    [[("metric","skewness")],{"cmap":"berlin"}],
+    [[("metric","count")],{"vmin":0,"vmax":200,"cmap":lcmap}],
+    [[("metric",["min","max","mean","stddev","kurtosis"])],{"cmap":lcmap}],
+    [[("metric","skewness")],{"cmap":lcmap}],
 
     [[("band",swbands),("metric",["mean","min","max"])],{"vmin":0,"vmax":1}],
     [[("band",lwbands),("metric",["mean","min","max"])],
@@ -25,8 +28,8 @@ plot_spec_config = [
     [[("band", swbands), ("metric", "stddev")], {"vmin":0, "vmax":.1}],
     [[("band", lwbands), ("metric", "stddev")], {"vmin":0, "vmax":12}],
 
-    [[("band", swbands), ("metric", "skewness")], {"vmin":-10, "vmax":10}],
-    [[("band", lwbands), ("metric", "skewness")], {"vmin":-10, "vmax":10}],
+    [[("band", swbands), ("metric", "skewness")], {"vmin":-5, "vmax":5}],
+    [[("band", lwbands), ("metric", "skewness")], {"vmin":-5, "vmax":5}],
 
     [[("band", swbands), ("metric", "kurtosis")], {"vmin":1, "vmax":120}],
     [[("band", lwbands), ("metric", "kurtosis")], {"vmin":1, "vmax":120}],
@@ -79,6 +82,7 @@ if __name__=="__main__":
             "px_scale":1, ## resolution factor wrt domain
             },
         }
+    nworkers = 8
 
     for ptype in plot_types:
         qr = QueryResults(list(out_dir.iterdir()), name_fields)
@@ -128,23 +132,25 @@ if __name__=="__main__":
                     )
             merged = finalize_welford(merged)
 
-            for k,v in merged.items():
-                product_fields["metric"] = k
+            def _mp_plot_geostationary(metric_tuple):
+                metric_name, metric_data = metric_tuple
+                product_fields["metric"] = metric_name
                 hc = HConfig(plot_spec_config)
                 ## getting rid of nans from coordinates
-                m_data_nans = np.isnan(merged[k])
+                m_data_nans = np.isnan(merged[metric_name])
                 m_coord_nans = np.any(np.isnan(gg_dom.latlon), axis=-1)
 
                 ## plot the data normally
                 #'''
-                out_str = f"{ptype}_{'_'.join(mkey)}_{k}"
+                out_str = f"{ptype}_{'_'.join(mkey)}_{metric_name}"
                 if len(merge_over):
                     out_str += f"_{'-'.join(merge_over)}"
                 out_path = fig_dir.joinpath(out_str + ".png")
-                print(out_path.stem, k,
-                    f"{np.nanmin(merged[k]):.3f} {np.nanmax(merged[k]):.3f}")
+                #print(out_path.stem, metric_name,
+                #    f"{np.nanmin(metric_data):.3f} " + \
+                #    f"{np.nanmax(metric_data):.3f}")
                 plot_geostationary(
-                    data=np.where(m_coord_nans, np.nan, merged[k]),
+                    data=np.where(m_coord_nans, np.nan, metric_data),
                     sat_lon=gg_dom.longitude_of_projection_origin,
                     sat_height=gg_dom.perspective_point_height,
                     sat_sweep=gg_dom.sweep_angle_axis,
@@ -152,7 +158,7 @@ if __name__=="__main__":
                         "projection":{
                             "type":"geostationary",
                             },
-                        "title":f"{' '.join(mkey)} {k}",
+                        "title":f"{' '.join(mkey)} {metric_name}",
                         "extent":extent,
                         "cb_orient":"horizontal",
                         "gridlines_color":"black",
@@ -164,6 +170,12 @@ if __name__=="__main__":
                     show=False,
                     debug=False,
                     )
+                return out_path
+
+            with Pool(nworkers) as pool:
+                for r in pool.imap_unordered(
+                        _mp_plot_geostationary, merged.items()):
+                    print(f"Generated {r.as_posix()}")
                 #'''
 
                 ## plot nan values

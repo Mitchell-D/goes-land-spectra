@@ -5,6 +5,7 @@ and viewing zenith angles for geostationary satellites
 import numpy as np
 import pickle as pkl
 import warnings
+from pvlib import solarposition
 from pathlib import Path
 from netCDF4 import Dataset
 
@@ -151,6 +152,26 @@ class GeosGeom:
         return self._lons
 
     @property
+    def szas(self, time, altitude=None, pressure=None, method="nrel_numba",
+           temperature=12.0,  **kwargs) -> np.array:
+        """
+        Calculate solar zenith angles using the NREL SPA algorithm
+
+        :@param temperature: Surface temp in degrees celsius, which is only
+            really needed for refraction at a very high SZA.
+        """
+        solarposition.get_solarposition(
+            time,
+            latitude=self.lats,
+            longitude=self.lons,
+            altitude=altitude,
+            pressure=pressure,
+            method=method,
+            temperature=temperature,
+            **kwargs,
+            )
+
+    @property
     def vzas(self) -> np.array:
         """
         Viewing zenith angle getter
@@ -242,7 +263,7 @@ class GeosGeom:
         r_eq = self.r_eq
         h = self.perspective_point_height + r_eq
         theta_s = np.sqrt(self.e_w_scan_angles**2 + self.n_s_scan_angles**2)
-        vzas = np.degrees(np.arcsin((h / r_eq) * np.sin(theta_s)))
+        vzas = np.arcsin((h / r_eq) * np.sin(theta_s))
         return vzas
 
 def load_geos_geom(geom_pkl_path, shape=None):

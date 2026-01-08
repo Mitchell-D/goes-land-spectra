@@ -502,9 +502,6 @@ class HConfig:
         # so larger fields override smaller ones
         matches = sorted(matches, key=lambda x:len(x[0]))
 
-        pprint(query_dict)
-        pprint(matches)
-        print()
         # Combine configs with later (larger)fields
         # overriding earlier (smaller) ones
         result = {}
